@@ -1,0 +1,53 @@
+# Key Point
+
+## Key Files
+
+- `src/pet.ts`: 桌宠渲染、拖拽、悬停暂停和右键触发原生小菜单。
+- `src/assets/slime/*.png`: 默认史莱姆 7 个状态的 sprite sheet 素材。
+- `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态和配置持久化。
+- `docs/prds/001-tauri-mac-desktop-pet.md`: V1 产品边界和交互规格。
+- `docs/prds/002-remember-clipboard-history.md`: “记住”剪贴板历史功能边界和实现决策。
+- `docs/qa/v1-smoke-checklist.md`: V1 发布前手工 smoke test 清单。
+
+## Important Decisions
+
+- 左键单击宠物不触发操作；右键打开宠物小菜单。
+- 鼠标悬停在宠物上时，自主移动暂停，但动画和计时器继续。
+- 悬停暂停不能只依赖 `pointerleave`；需要用原生 cursor/window frame 定期校准，避免丢事件后卡 idle。
+- 宠物小菜单使用 macOS 原生弹出菜单，不使用前端自绘菜单作为常规交互。
+- 原生菜单倒计时用 `MenuItem::set_text` 更新已有菜单项文本，避免整棵菜单重建。
+- 菜单栏提供“移回活动区域”；该入口会显示宠物、移到当前活动区域内并持久化位置，宠物小菜单保持轻量不放归位入口。
+- 设置页活动区域框选在拖动阶段先限制在默认活动区域内，并即时提示尺寸/最小尺寸/保存状态；后端仍用 `normalize_activity_area` 兜底。
+- “记住”剪贴板历史是 001 后的独立功能；只支持纯文本，菜单栏入口叫“记住”，宠物小菜单轻量入口叫“获取”。
+- “刚复制”是运行期临时历史，最多 10 条，不落盘；“记住的”是用户主动保存的持久历史，最多 50 条。
+- “记住的”必须加密存储且不允许文本明文落盘；V1 采用本地随机 key 文件 + 加密数据文件，不做强安全承诺。
+- 小菜单“获取”分“刚复制”和“记住的”，显示全部可用条目，条目预览截断到 20 字符，点击只写回剪贴板不自动粘贴。
+- “记住的”支持置顶，置顶管理只在“记住”窗口内做；删除“记住的”需要系统原生确认。
+- 默认皮肤优先使用 7 个状态 sprite sheet，代码绘制史莱姆保留为加载兜底。
+- `idle/sleep/timer-waiting/celebrate/dragged` 当前按 6x1 切帧，`walk/run` 按 6x2 切帧。
+- `walk/run` 的 6x2 帧表按方向分行播放：walk 第 0 行向左、第 1 行向右；run 第 0 行向右、第 1 行向左，不能把两行当连续 12 帧循环。
+- `walk/run` 当前播放速度为 walk 5fps、run 8fps，避免 6 帧动作切换过快。
+- sprite 帧会逐帧裁剪有效内容，并用最大连通色块作为史莱姆主体锚点归一化到固定显示盒。
+- sprite 绘制会额外约束整帧内容留在 32x32 逻辑画布内，并保留 2px 安全边距，避免沙漏/特效/拖尾被裁切。
+- `src/assets/slime/*.png` 当前已处理为带 alpha 的透明 PNG；后续替换素材也应保持透明通道。
+- 默认 sprite sheet 中孤立小碎片和边缘残影按素材层清理，不在运行时代码里增加通用碎片过滤。
+- `celebrate.png` 仍按 6x1 切帧，但当前素材宽 2520px，每帧 420px，用空白边距容纳彩纸和主体跨格部分。
+- 宠物移动坐标按 native 物理像素处理；`petDimensions` 用于逻辑窗口/canvas 尺寸，`petWindowDimensions` 用于活动区域边界和拖拽/移动 clamp。
+- `move_pet_window` 只负责移动窗口和更新内存中的 `last_position`；磁盘持久化要低频 debounce 或通过 `persist_pet_position` 在拖拽结束/进入休息点显式触发。
+- 设置页连续保存要基于本地 draft preferences 合并，避免快速切换多个控件时后一个请求用旧 bootstrap 覆盖前一个字段。
+
+## Known Issues
+
+- `timer-waiting` 曾出现第 5 帧左缘被切平；原因是第 5 帧左侧轮廓溢出到第 4 帧右边界，不能简单当残影删除。
+
+## Things To Avoid
+
+- 不要用每秒 `set_menu` 重建原生菜单来刷新倒计时。
+- 替换 `src/assets/slime/*.png` 时不要改帧布局，除非同步更新 `src/pet.ts` 里的 `slimeSpriteSheets` 配置。
+- 不要在代码里按颜色阈值主动去除 sprite 白边，边缘和透明度问题应通过素材本身解决。
+- 不要在运行时做通用连通域碎片删除，避免误删庆祝粒子、沙漏等非主体元素。
+- 清理 sprite sheet 边缘组件前，要先确认它不是相邻帧溢出的真实轮廓。
+- 不要为了 `celebrate` 彩纸跨格问题改运行时切帧逻辑，优先用更宽的单帧素材留白解决。
+- 不要在每次自主移动 tick 里写 `settings.json` 或重复设置窗口 size，长期运行会造成无意义 I/O 和 native 调用。
+- 不要把“刚复制”默认持久化；只有用户主动“记住”的内容才能写入加密存储。
+- 不要把剪贴板历史塞成宠物小菜单里的管理界面；小菜单只做“获取”，保存/删除/置顶放“记住”窗口。

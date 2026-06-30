@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for Deskmon pet and settings windows",
+  "windows": [
+    "pet",
+    "settings"
+  ],
+  "permissions": [
+    "core:default",
+    "notification:default"
+  ]
+}
