@@ -253,17 +253,28 @@ impl RememberState {
         id: &str,
         pinned: bool,
     ) -> Result<(), String> {
-        let pinned_order = if pinned {
-            Some(self.next_order())
-        } else {
-            None
-        };
-        let Some(entry) = self.notebook.iter_mut().find(|entry| entry.id == id) else {
+        self.update_notebook_pinned(id, pinned)?;
+        persist_notebook(app, &self.notebook)
+    }
+
+    fn update_notebook_pinned(&mut self, id: &str, pinned: bool) -> Result<(), String> {
+        let Some(index) = self.notebook.iter().position(|entry| entry.id == id) else {
             return Err("没有找到这条记忆".into());
         };
-        entry.pinned_order = pinned_order;
+
+        if pinned {
+            let pinned_order = self.next_order();
+            self.notebook[index].pinned_order = Some(pinned_order);
+        } else {
+            if self.notebook[index].pinned_order.is_some() {
+                let saved_order = self.next_order();
+                self.notebook[index].saved_order = saved_order;
+            }
+            self.notebook[index].pinned_order = None;
+        }
+
         sort_notebook(&mut self.notebook);
-        persist_notebook(app, &self.notebook)
+        Ok(())
     }
 
     pub fn reset_notebook(&mut self, app: &AppHandle) -> Result<(), String> {
@@ -543,6 +554,64 @@ mod tests {
             .map(|entry| entry.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["pinned-new", "pinned-old", "fresh", "old"]);
+    }
+
+    #[test]
+    fn cancelling_pin_moves_entry_to_first_unpinned() {
+        let mut state = RememberState {
+            notebook: vec![
+                NotebookEntry {
+                    id: "unpinned-fresh".into(),
+                    text: "unpinned-fresh".into(),
+                    saved_order: 40,
+                    pinned_order: None,
+                    truncated: false,
+                },
+                NotebookEntry {
+                    id: "unpinned-old".into(),
+                    text: "unpinned-old".into(),
+                    saved_order: 10,
+                    pinned_order: None,
+                    truncated: false,
+                },
+                NotebookEntry {
+                    id: "keep-pinned".into(),
+                    text: "keep-pinned".into(),
+                    saved_order: 20,
+                    pinned_order: Some(60),
+                    truncated: false,
+                },
+                NotebookEntry {
+                    id: "cancel-pinned".into(),
+                    text: "cancel-pinned".into(),
+                    saved_order: 30,
+                    pinned_order: Some(80),
+                    truncated: false,
+                },
+            ],
+            next_order: 80,
+            ..RememberState::default()
+        };
+
+        state
+            .update_notebook_pinned("cancel-pinned", false)
+            .expect("cancels pin");
+
+        let ids = state
+            .notebook
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                "keep-pinned",
+                "cancel-pinned",
+                "unpinned-fresh",
+                "unpinned-old"
+            ]
+        );
+        assert_eq!(state.notebook[1].pinned_order, None);
     }
 
     #[test]

@@ -11,6 +11,7 @@ const sourceLabels: Record<RememberSource, string> = {
   recent: "记忆中",
   notebook: "笔记本",
 };
+const rememberSources: RememberSource[] = ["recent", "notebook"];
 
 export function mountRemember(root: HTMLElement): void {
   const app = new RememberController(root);
@@ -23,6 +24,10 @@ class RememberController {
   private busy = false;
   private status = "";
   private statusTone: "neutral" | "success" | "warning" | "error" = "neutral";
+  private readonly scrollPositions: Record<RememberSource, number> = {
+    recent: 0,
+    notebook: 0,
+  };
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -66,6 +71,7 @@ class RememberController {
   }
 
   private render(): void {
+    this.captureScrollPositions();
     this.root.replaceChildren();
     const shell = element("section", "remember-shell");
     const header = element("header", "remember-header");
@@ -80,10 +86,7 @@ class RememberController {
           : "正在翻看记忆",
       ),
     );
-    const refreshButton = element("button", "remember-icon-button", "刷新");
-    refreshButton.disabled = this.busy;
-    refreshButton.addEventListener("click", () => void this.refresh());
-    header.append(titleBlock, refreshButton);
+    header.append(titleBlock);
 
     const layout = element("main", "remember-layout");
     const listPane = element("section", "remember-list-pane");
@@ -121,14 +124,6 @@ class RememberController {
     const section = element("section", "remember-section");
     const header = element("div", "remember-section-header");
     header.append(element("h2", "", sourceLabels[source]));
-    if (source === "recent" && items.length > 0) {
-      const clearButton = element("button", "subtle-button", "全部忘记");
-      clearButton.disabled = this.busy;
-      clearButton.addEventListener("click", () =>
-        void this.mutate("remember_clear_recent", {}, "记忆中已经清空"),
-      );
-      header.append(clearButton);
-    }
     section.append(header);
 
     if (items.length === 0) {
@@ -141,22 +136,47 @@ class RememberController {
     }
 
     const list = element("div", "remember-list");
+    list.dataset.source = source;
+    list.addEventListener("scroll", () => {
+      this.scrollPositions[source] = list.scrollTop;
+    });
     for (const item of items) {
-      const selected = this.selection?.source === source && this.selection.id === item.id;
-      const button = element("button", selected ? "remember-row selected" : "remember-row");
-      button.addEventListener("click", () => {
-        this.selection = { source, id: item.id };
-        this.render();
-      });
-      const preview = element("span", "remember-row-preview", item.preview);
-      button.append(preview);
-      if (item.pinned) {
-        button.append(element("span", "remember-row-chip", "置顶"));
-      }
-      list.append(button);
+      list.append(this.renderRow(source, item));
     }
     section.append(list);
+    this.restoreScrollPosition(source, list);
     return section;
+  }
+
+  private renderRow(source: RememberSource, item: RememberItem): HTMLElement {
+    const rowSelection: Selection = { source, id: item.id };
+    const selected = this.selection?.source === source && this.selection.id === item.id;
+    const row = element("article", selected ? "remember-row selected" : "remember-row");
+    const mainButton = element("button", "remember-row-main");
+    mainButton.addEventListener("click", () => this.selectItem(rowSelection));
+    mainButton.append(element("span", "remember-row-preview", item.preview));
+    if (item.pinned) {
+      mainButton.append(element("span", "remember-row-chip", "置顶"));
+    }
+
+    const actions = element("div", "remember-row-actions");
+    actions.append(this.rowActionButton("回忆", rowSelection, () => this.resetClipboard(rowSelection)));
+    if (source === "recent") {
+      actions.append(
+        this.rowActionButton("记住它", rowSelection, () => this.saveItem(rowSelection)),
+        this.rowActionButton("忘记", rowSelection, () => this.forgetRecent(rowSelection), "danger"),
+      );
+    } else {
+      actions.append(
+        this.rowActionButton(item.pinned ? "取消置顶" : "置顶", rowSelection, () =>
+          this.setPinned(rowSelection, !item.pinned),
+        ),
+        this.rowActionButton("忘记", rowSelection, () => this.forgetNotebook(rowSelection), "danger"),
+      );
+    }
+
+    row.append(mainButton, actions);
+    return row;
   }
 
   private renderDetail(): HTMLElement {
@@ -188,35 +208,30 @@ class RememberController {
     text.readOnly = true;
     text.value = item.text;
 
-    const actions = element("div", "remember-actions");
-    actions.append(this.actionButton("回忆", () => this.resetClipboard(selection)));
-    if (selection.source === "recent") {
-      actions.append(
-        this.actionButton("记住它", () => this.saveItem(selection)),
-        this.actionButton("忘记", () => this.forgetRecent(selection), "danger"),
-      );
-    } else {
-      actions.append(
-        this.actionButton(item.pinned ? "取消放在最上面" : "放在最上面", () =>
-          this.setPinned(selection, !item.pinned),
-        ),
-        this.actionButton("忘记", () => this.forgetNotebook(selection), "danger"),
-      );
-    }
-
-    pane.append(header, text, actions);
+    pane.append(header, text);
     return pane;
   }
 
-  private actionButton(
+  private rowActionButton(
     label: string,
+    selection: Selection,
     action: () => Promise<void>,
     tone: "normal" | "danger" = "normal",
   ): HTMLButtonElement {
-    const button = element("button", tone === "danger" ? "danger-button" : "primary-button", label);
+    const button = element("button", `remember-row-action ${tone}`, label);
     button.disabled = this.busy;
-    button.addEventListener("click", () => void action());
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.selection = selection;
+      void action();
+    });
     return button;
+  }
+
+  private selectItem(selection: Selection): void {
+    this.selection = selection;
+    this.render();
   }
 
   private async resetClipboard(selection: Selection): Promise<void> {
@@ -287,6 +302,24 @@ class RememberController {
     return items.find((item) => item.id === selection.id) ?? null;
   }
 
+  private captureScrollPositions(): void {
+    for (const source of rememberSources) {
+      const list = this.root.querySelector<HTMLElement>(
+        `.remember-list[data-source="${source}"]`,
+      );
+      if (list) {
+        this.scrollPositions[source] = list.scrollTop;
+      }
+    }
+  }
+
+  private restoreScrollPosition(source: RememberSource, list: HTMLElement): void {
+    const scrollTop = this.scrollPositions[source];
+    requestAnimationFrame(() => {
+      const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTop = Math.min(scrollTop, maxScrollTop);
+    });
+  }
 }
 
 function element<K extends keyof HTMLElementTagNameMap>(
