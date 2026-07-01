@@ -1,3 +1,5 @@
+mod remember;
+
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -10,18 +12,21 @@ use tauri::{
     menu::{Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder},
     tray::TrayIconBuilder,
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewUrl,
-    WebviewWindowBuilder,
+    WebviewWindow, WebviewWindowBuilder,
 };
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
 
 const PET_WINDOW: &str = "pet";
 const SETTINGS_WINDOW: &str = "settings";
+const REMEMBER_WINDOW: &str = "remember";
 const TRAY_ID: &str = "deskmon-tray";
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
 const SETTINGS_FILE: &str = "settings.json";
 const MIN_MARGIN: f64 = 24.0;
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
+const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +183,7 @@ struct WindowFramePayload {
 struct AppState {
     settings: Mutex<Settings>,
     timer: Mutex<Option<TimerState>>,
+    remember: Mutex<remember::RememberState>,
     menu_items: Mutex<MenuItems>,
     last_position_saved_at_ms: Mutex<u64>,
 }
@@ -386,6 +392,47 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn open_remember_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(REMEMBER_WINDOW) {
+        return show_window_in_front(&window);
+    }
+
+    let window = WebviewWindowBuilder::new(
+        &app,
+        REMEMBER_WINDOW,
+        WebviewUrl::App("index.html#remember".into()),
+    )
+    .title("记忆力")
+    .inner_size(760.0, 560.0)
+    .min_inner_size(620.0, 420.0)
+    .center()
+    .resizable(true)
+    .build()
+    .map_err(|err| err.to_string())?;
+    show_window_in_front(&window)
+}
+
+fn show_window_in_front(window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|err| err.to_string())?;
+    let _ = window.unminimize();
+    window.set_focus().map_err(|err| err.to_string())?;
+
+    #[cfg(target_os = "macos")]
+    {
+        window
+            .set_always_on_top(true)
+            .map_err(|err| err.to_string())?;
+        window.set_focus().map_err(|err| err.to_string())?;
+        let window = window.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(240));
+            let _ = window.set_always_on_top(false);
+        });
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 fn show_pet_menu(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let menu = build_pet_menu(&app, &state)?;
@@ -393,6 +440,195 @@ fn show_pet_menu(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<()
         .get_webview_window(PET_WINDOW)
         .ok_or("pet window is not available")?;
     window.popup_menu(&menu).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn get_remember_snapshot(
+    state: tauri::State<'_, AppState>,
+) -> Result<remember::RememberSnapshot, String> {
+    let remember_state = state
+        .remember
+        .lock()
+        .map_err(|_| "remember lock poisoned")?;
+    Ok(remember::snapshot(&remember_state))
+}
+
+#[tauri::command]
+fn open_remember(app: AppHandle) -> Result<(), String> {
+    open_remember_window(app)
+}
+
+#[tauri::command]
+fn remember_reset_clipboard(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    source: String,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    remember_reset_clipboard_inner(&app, &state, &source, &id)
+}
+
+#[tauri::command]
+fn remember_save_item(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    source: String,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    let (text, truncated) = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state
+            .entry_text(&source, &id)
+            .ok_or("没有找到这条记忆")?
+    };
+
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.save_entry(&app, text, truncated)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn remember_forget_recent(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.forget_recent(&id);
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn remember_clear_recent(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.clear_recent();
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+async fn remember_forget_notebook(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    let confirmed = confirm_dialog(
+        app.clone(),
+        "记忆力",
+        "要让 Deskmon 忘记这条笔记本内容吗？",
+        "忘记",
+    )
+    .await?;
+
+    if !confirmed {
+        return get_remember_snapshot(state);
+    }
+
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.forget_notebook(&app, &id)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn remember_set_notebook_pinned(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.set_notebook_pinned(&app, &id, pinned)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+async fn remember_reset_notebook(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<remember::RememberSnapshot, String> {
+    let confirmed = confirm_dialog(
+        app.clone(),
+        "重置记忆力",
+        "笔记本会被清空，这些内容无法恢复。",
+        "重置",
+    )
+    .await?;
+
+    if !confirmed {
+        return get_remember_snapshot(state);
+    }
+
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.reset_notebook(&app)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
+async fn confirm_dialog(
+    app: AppHandle,
+    title: &'static str,
+    message: &'static str,
+    confirm_label: &'static str,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .message(message)
+            .title(title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                confirm_label.into(),
+                "取消".into(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|err| err.to_string())
 }
 
 fn set_pet_visible_inner(
@@ -546,6 +782,120 @@ fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
     });
 }
 
+fn spawn_clipboard_worker(app: AppHandle) {
+    thread::spawn(move || {
+        let mut clipboard = loop {
+            match arboard::Clipboard::new() {
+                Ok(clipboard) => break clipboard,
+                Err(_) => thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS)),
+            }
+        };
+
+        let baseline = clipboard
+            .get_text()
+            .ok()
+            .and_then(|text| remember::normalize_text(&text).map(|(text, _)| text));
+        if let Some(state) = app.try_state::<AppState>() {
+            if let Ok(mut remember_state) = state.remember.lock() {
+                remember_state.clipboard_initialized = true;
+                remember_state.last_clipboard_text = baseline;
+            }
+        }
+
+        loop {
+            thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+            let text = match clipboard.get_text() {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+            let Some((text, truncated)) = remember::normalize_text(&text) else {
+                continue;
+            };
+            let Some(state) = app.try_state::<AppState>() else {
+                break;
+            };
+            let changed = {
+                let mut remember_state = match state.remember.lock() {
+                    Ok(remember_state) => remember_state,
+                    Err(_) => break,
+                };
+                if !remember_state.clipboard_initialized {
+                    remember_state.clipboard_initialized = true;
+                    remember_state.last_clipboard_text = Some(text);
+                    false
+                } else if remember_state.last_clipboard_text.as_deref() == Some(text.as_str()) {
+                    false
+                } else {
+                    remember_state.last_clipboard_text = Some(text.clone());
+                    remember_state.push_recent(text, truncated);
+                    true
+                }
+            };
+
+            if changed {
+                let _ = emit_current_remember_changed(&app);
+            }
+        }
+    });
+}
+
+fn remember_reset_clipboard_inner(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    source: &str,
+    id: &str,
+) -> Result<remember::RememberSnapshot, String> {
+    let (text, truncated) = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state
+            .entry_text(source, id)
+            .ok_or("没有找到这条记忆")?
+    };
+
+    set_clipboard_text(&text)?;
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.clipboard_initialized = true;
+        remember_state.last_clipboard_text = Some(text.clone());
+        remember_state.push_recent(text, truncated);
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(app, &snapshot);
+    Ok(snapshot)
+}
+
+fn set_clipboard_text(text: &str) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .map_err(|err| err.to_string())?
+        .set_text(text.to_owned())
+        .map_err(|err| err.to_string())
+}
+
+fn emit_current_remember_changed(app: &AppHandle) -> Result<(), String> {
+    let Some(state) = app.try_state::<AppState>() else {
+        return Ok(());
+    };
+    let snapshot = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(app, &snapshot);
+    Ok(())
+}
+
+fn emit_remember_changed(app: &AppHandle, snapshot: &remember::RememberSnapshot) {
+    let _ = app.emit("deskmon-remember-changed", snapshot);
+}
+
 fn create_pet_window(app: &tauri::App) -> Result<(), String> {
     let settings = app
         .state::<AppState>()
@@ -661,6 +1011,7 @@ fn build_tray_menu(
 
     builder = builder
         .separator()
+        .text("open_remember", "记忆力")
         .text("open_settings", "设置")
         .text("quit", "退出");
     builder.build().map_err(|err| err.to_string())
@@ -704,7 +1055,10 @@ fn build_pet_menu(
         builder = builder.item(&submenu).separator();
     }
 
+    let remember_submenu = build_remember_reset_submenu(app, state)?;
     builder = builder
+        .item(&remember_submenu)
+        .separator()
         .text("toggle_pause", pause_label)
         .text("hide_pet", "隐藏");
     builder.build().map_err(|err| err.to_string())
@@ -718,6 +1072,57 @@ fn build_timer_submenu(app: &AppHandle) -> Result<Submenu<tauri::Wry>, String> {
         .text("start_timer_25", "25 分钟")
         .build()
         .map_err(|err| err.to_string())
+}
+
+fn build_remember_reset_submenu(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+) -> Result<Submenu<tauri::Wry>, String> {
+    let snapshot = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember::snapshot(&remember_state)
+    };
+    let recent =
+        build_remember_entries_submenu(app, "记忆中", "remember_recent_", &snapshot.recent)?;
+    let notebook =
+        build_remember_entries_submenu(app, "笔记本", "remember_notebook_", &snapshot.notebook)?;
+    SubmenuBuilder::new(app, "回忆")
+        .item(&recent)
+        .item(&notebook)
+        .build()
+        .map_err(|err| err.to_string())
+}
+
+fn build_remember_entries_submenu(
+    app: &AppHandle,
+    label: &str,
+    id_prefix: &str,
+    entries: &[remember::RememberItemPayload],
+) -> Result<Submenu<tauri::Wry>, String> {
+    let mut builder = SubmenuBuilder::new(app, label);
+    if entries.is_empty() {
+        let item = MenuItem::with_id(
+            app,
+            format!("{id_prefix}empty"),
+            "还没有",
+            false,
+            None::<&str>,
+        )
+        .map_err(|err| err.to_string())?;
+        builder = builder.item(&item);
+    } else {
+        for entry in entries {
+            let pinned_mark = if entry.pinned { "↑ " } else { "" };
+            builder = builder.text(
+                format!("{id_prefix}{}", entry.id),
+                format!("{pinned_mark}{}", entry.preview),
+            );
+        }
+    }
+    builder.build().map_err(|err| err.to_string())
 }
 
 fn timer_status_label(timer: &TimerSnapshot) -> String {
@@ -783,6 +1188,18 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     let Some(state) = app.try_state::<AppState>() else {
         return;
     };
+    if let Some(id) = event_id.strip_prefix("remember_recent_") {
+        if id != "empty" {
+            let _ = remember_reset_clipboard_inner(app, &state, "recent", id);
+        }
+        return;
+    }
+    if let Some(id) = event_id.strip_prefix("remember_notebook_") {
+        if id != "empty" {
+            let _ = remember_reset_clipboard_inner(app, &state, "notebook", id);
+        }
+        return;
+    }
     match event_id {
         "toggle_pet" => {
             let visible = state
@@ -815,6 +1232,9 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         }
         "open_settings" => {
             let _ = open_settings_window(app.clone());
+        }
+        "open_remember" => {
+            let _ = open_remember_window(app.clone());
         }
         "quit" => {
             app.exit(0);
@@ -1082,14 +1502,18 @@ fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
             let loaded_settings = load_settings(app.handle());
+            let loaded_remember = remember::load(app.handle());
             {
                 let state = app.state::<AppState>();
                 let mut settings = state.settings.lock().expect("settings lock poisoned");
                 *settings = loaded_settings;
+                let mut remember_state = state.remember.lock().expect("remember lock poisoned");
+                *remember_state = loaded_remember;
             }
 
             #[cfg(target_os = "macos")]
@@ -1104,6 +1528,8 @@ pub fn run() {
                 handle_menu_event(app_handle, event.id().0.as_str());
             });
 
+            spawn_clipboard_worker(app.handle().clone());
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1113,7 +1539,16 @@ pub fn run() {
             move_pet_window,
             persist_pet_position,
             save_user_preferences,
-            show_pet_menu
+            show_pet_menu,
+            get_remember_snapshot,
+            open_remember,
+            remember_reset_clipboard,
+            remember_save_item,
+            remember_forget_recent,
+            remember_clear_recent,
+            remember_forget_notebook,
+            remember_set_notebook_pinned,
+            remember_reset_notebook
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

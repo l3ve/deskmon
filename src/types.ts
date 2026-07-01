@@ -61,3 +61,23 @@ export interface WindowFramePayload {
   size: Dimensions;
   cursor: Point;
 }
+
+export type RememberSource = "recent" | "notebook";
+
+export interface RememberItem {
+  id: string;
+  text: string;
+  preview: string;
+  pinned: boolean;
+  truncated: boolean;
+}
+
+export interface RememberSnapshot {
+  recent: RememberItem[];
+  notebook: RememberItem[];
+  error: string | null;
+  recentLimit: number;
+  notebookLimit: number;
+  textLimit: number;
+  previewChars: number;
+}

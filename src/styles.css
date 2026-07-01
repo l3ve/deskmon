@@ -250,6 +250,296 @@ input {
   color: #b83232;
 }
 
+.remember-root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: #17221b;
+  background: #f6f8f6;
+}
+
+.remember-shell {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+  padding: 18px 22px 16px;
+}
+
+.remember-header,
+.remember-error,
+.remember-detail-header,
+.remember-section-header,
+.remember-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remember-header h1,
+.remember-detail-header h2,
+.remember-section-header h2 {
+  margin: 0;
+  line-height: 1.2;
+}
+
+.remember-header h1 {
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.remember-summary,
+.remember-status,
+.remember-empty {
+  margin: 0;
+  color: #5a675e;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.remember-layout {
+  display: grid;
+  grid-template-columns: minmax(250px, 330px) minmax(0, 1fr);
+  gap: 14px;
+  min-height: 0;
+}
+
+.remember-list-pane,
+.remember-detail-pane,
+.remember-error {
+  border: 1px solid #cfd8cd;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(25, 39, 30, 0.06);
+}
+
+.remember-list-pane {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.remember-section {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  padding: 14px;
+  border-bottom: 1px solid #e1e7df;
+}
+
+.remember-section:last-child {
+  border-bottom: 0;
+}
+
+.remember-section-header {
+  min-height: 28px;
+  margin-bottom: 10px;
+}
+
+.remember-section-header h2,
+.remember-detail-header h2 {
+  font-size: 16px;
+}
+
+.remember-list {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.remember-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #233129;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.remember-row:hover {
+  background: #f0f6f0;
+}
+
+.remember-row.selected {
+  border-color: #2f9d61;
+  background: #e6f5ea;
+}
+
+.remember-row-preview {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remember-row-meta {
+  color: #6d746d;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.remember-row-chip {
+  min-width: 34px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #267347;
+  background: #e0f0e6;
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.remember-detail-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px;
+}
+
+.remember-detail-header {
+  min-height: 30px;
+  align-items: flex-start;
+}
+
+.remember-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.remember-badge {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: #216142;
+  background: #dcefe4;
+  font-size: 12px;
+}
+
+.remember-badge.warning {
+  color: #8b5015;
+  background: #f5e6cf;
+}
+
+.remember-text {
+  width: 100%;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid #cfd8cd;
+  border-radius: 8px;
+  resize: none;
+  color: #18231d;
+  background: #ffffff;
+  font:
+    13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", monospace;
+}
+
+.remember-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-height: 36px;
+}
+
+.remember-icon-button,
+.primary-button,
+.danger-button,
+.subtle-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.remember-icon-button,
+.subtle-button {
+  border: 1px solid #c4d0c2;
+  color: #24342b;
+  background: #ffffff;
+}
+
+.primary-button {
+  border: 1px solid #267347;
+  color: #ffffff;
+  background: #2f9d61;
+}
+
+.danger-button {
+  border: 1px solid #b65757;
+  color: #ffffff;
+  background: #b83232;
+}
+
+.remember-icon-button:hover,
+.subtle-button:hover {
+  background: #edf4ed;
+}
+
+.primary-button:hover {
+  background: #278554;
+}
+
+.danger-button:hover {
+  background: #9f2a2a;
+}
+
+.remember-icon-button:disabled,
+.primary-button:disabled,
+.danger-button:disabled,
+.subtle-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.remember-error {
+  padding: 10px 12px;
+  border-color: #edc1bc;
+  background: #fff4f2;
+}
+
+.remember-error p {
+  margin: 0;
+  color: #8f2e2e;
+  font-size: 13px;
+}
+
+.remember-empty {
+  padding: 12px 4px;
+}
+
+.remember-status {
+  min-height: 20px;
+}
+
+.remember-status.success {
+  color: #267347;
+}
+
+.remember-status.warning {
+  color: #a66415;
+}
+
+.remember-status.error {
+  color: #b83232;
+}
+
 @media (max-width: 640px) {
   .settings-shell {
     padding: 18px;
@@ -266,5 +556,27 @@ input {
 
   .segmented button {
     min-width: 0;
+  }
+
+  .remember-shell {
+    padding: 14px;
+  }
+
+  .remember-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(180px, 38%) minmax(0, 1fr);
+  }
+
+  .remember-list-pane {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .remember-section {
+    border-right: 0;
+    border-bottom: 1px solid #e1e7df;
+  }
+
+  .remember-section:last-child {
+    border-bottom: 0;
   }
 }

@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { mountPet } from "./pet";
+import { mountRemember } from "./remember";
 import { mountSettings } from "./settings";
 
 const root = document.querySelector<HTMLElement>("#app");
@@ -13,6 +14,8 @@ const route = window.location.hash.replace("#", "") || currentWindow.label;
 
 if (route === "settings") {
   mountSettings(root);
+} else if (route === "remember") {
+  mountRemember(root);
 } else {
   mountPet(root);
 }

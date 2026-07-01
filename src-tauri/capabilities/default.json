@@ -4,7 +4,8 @@
   "description": "Capability for Deskmon pet and settings windows",
   "windows": [
     "pet",
-    "settings"
+    "settings",
+    "remember"
   ],
   "permissions": [
     "core:default",

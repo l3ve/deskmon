@@ -21,4 +21,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+arboard = "3"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
