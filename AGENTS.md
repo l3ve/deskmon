@@ -16,7 +16,7 @@
 
 ### Rules
 
-1. 日子文件放在：`.ai/logs/YYYY-MM-DD.md`
+1. 日志文件放在：`.ai/logs/YYYY-MM-DD.md`
 2. 下面指定的文件夹内的所有文件和指定的文件不需要被观察，不记录在 Modified Files 里
    - `.ai/keypoint.md`
    - `.ai/logs/`
