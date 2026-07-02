@@ -12,6 +12,10 @@ const sourceLabels: Record<RememberSource, string> = {
   notebook: "笔记本",
 };
 const rememberSources: RememberSource[] = ["recent", "notebook"];
+const sourceMeta: Record<RememberSource, (count: number) => string> = {
+  recent: (count) => `临时想到的 ${count} 条`,
+  notebook: (count) => `牢牢记下的 ${count} 条`,
+};
 
 export function mountRemember(root: HTMLElement): void {
   const app = new RememberController(root);
@@ -73,10 +77,12 @@ class RememberController {
   private render(): void {
     this.captureScrollPositions();
     this.root.replaceChildren();
-    const shell = element("section", "remember-shell");
+    const shellClass = this.snapshot?.error ? "remember-shell with-error" : "remember-shell";
+    const shell = element("section", shellClass);
     const header = element("header", "remember-header");
-    const titleBlock = element("div");
-    titleBlock.append(
+    const titleBlock = element("div", "remember-title-block");
+    const titleCopy = element("div");
+    titleCopy.append(
       element("h1", "", "记忆力"),
       element(
         "p",
@@ -86,6 +92,7 @@ class RememberController {
           : "正在翻看记忆",
       ),
     );
+    titleBlock.append(element("span", "remember-title-icon"), titleCopy);
     header.append(titleBlock);
 
     const layout = element("main", "remember-layout");
@@ -99,12 +106,11 @@ class RememberController {
     const detailPane = this.renderDetail();
     layout.append(listPane, detailPane);
 
-    const status = element("p", `remember-status ${this.statusTone}`, this.status);
     shell.append(header);
     if (this.snapshot?.error) {
       shell.append(this.renderError(this.snapshot.error));
     }
-    shell.append(layout, status);
+    shell.append(layout);
     this.root.append(shell);
   }
 
@@ -121,15 +127,21 @@ class RememberController {
   }
 
   private renderSection(source: RememberSource, items: RememberItem[]): HTMLElement {
-    const section = element("section", "remember-section");
+    const emptyClass = items.length === 0 ? " empty" : "";
+    const section = element("section", `remember-section ${source}${emptyClass}`);
     const header = element("div", "remember-section-header");
-    header.append(element("h2", "", sourceLabels[source]));
+    const title = element("div", "remember-section-title");
+    title.append(
+      element("h2", "", sourceLabels[source]),
+      element("p", "", sourceMeta[source](items.length)),
+    );
+    header.append(title);
     section.append(header);
 
     if (items.length === 0) {
       const emptyText =
         source === "recent"
-          ? "复制文本后会被 Deskmon 临时捧来这里，退出后清空。"
+          ? "复制文本后会被 Deskmon 临时想到这里，退出后清空。"
           : "点击“记住它”后会加密保存在本机。";
       section.append(element("p", "remember-empty", emptyText));
       return section;
@@ -195,8 +207,11 @@ class RememberController {
     const title = element("div");
     title.append(element("h2", "", sourceLabels[selection.source]));
     const badges = element("div", "remember-badges");
+    if (selection.source === "recent") {
+      badges.append(element("span", "remember-badge", "临时"));
+    }
     if (item.pinned) {
-      badges.append(element("span", "remember-badge", "放在最上面"));
+      badges.append(element("span", "remember-badge", "置顶"));
     }
     if (item.truncated) {
       badges.append(element("span", "remember-badge warning", "已截断"));
@@ -208,7 +223,8 @@ class RememberController {
     text.readOnly = true;
     text.value = item.text;
 
-    pane.append(header, text);
+    const status = element("p", `remember-status ${this.statusTone}`, this.status);
+    pane.append(header, text, status);
     return pane;
   }
 

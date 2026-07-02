@@ -20,6 +20,10 @@ use tauri_plugin_notification::NotificationExt;
 const PET_WINDOW: &str = "pet";
 const SETTINGS_WINDOW: &str = "settings";
 const REMEMBER_WINDOW: &str = "remember";
+const REMEMBER_WINDOW_WIDTH: f64 = 920.0;
+const REMEMBER_WINDOW_HEIGHT: f64 = 620.0;
+const REMEMBER_WINDOW_MIN_WIDTH: f64 = 780.0;
+const REMEMBER_WINDOW_MIN_HEIGHT: f64 = 520.0;
 const TRAY_ID: &str = "deskmon-tray";
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
@@ -394,6 +398,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
 
 fn open_remember_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(REMEMBER_WINDOW) {
+        ensure_remember_window_size(&window)?;
         return show_window_in_front(&window);
     }
 
@@ -403,13 +408,42 @@ fn open_remember_window(app: AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html#remember".into()),
     )
     .title("记忆力")
-    .inner_size(760.0, 560.0)
-    .min_inner_size(620.0, 420.0)
+    .inner_size(REMEMBER_WINDOW_WIDTH, REMEMBER_WINDOW_HEIGHT)
+    .min_inner_size(REMEMBER_WINDOW_MIN_WIDTH, REMEMBER_WINDOW_MIN_HEIGHT)
     .center()
     .resizable(true)
     .build()
     .map_err(|err| err.to_string())?;
     show_window_in_front(&window)
+}
+
+fn ensure_remember_window_size(window: &WebviewWindow) -> Result<(), String> {
+    window
+        .set_min_size(Some(Size::Logical(LogicalSize::new(
+            REMEMBER_WINDOW_MIN_WIDTH,
+            REMEMBER_WINDOW_MIN_HEIGHT,
+        ))))
+        .map_err(|err| err.to_string())?;
+
+    let size = window.inner_size().map_err(|err| err.to_string())?;
+    let scale = window.scale_factor().map_err(|err| err.to_string())?;
+    let width = size.width as f64 / scale;
+    let height = size.height as f64 / scale;
+
+    if width < REMEMBER_WINDOW_MIN_WIDTH
+        || height < REMEMBER_WINDOW_MIN_HEIGHT
+        || width > REMEMBER_WINDOW_WIDTH
+        || height > REMEMBER_WINDOW_HEIGHT
+    {
+        window
+            .set_size(Size::Logical(LogicalSize::new(
+                REMEMBER_WINDOW_WIDTH,
+                REMEMBER_WINDOW_HEIGHT,
+            )))
+            .map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
 }
 
 fn show_window_in_front(window: &WebviewWindow) -> Result<(), String> {
@@ -547,7 +581,9 @@ async fn remember_forget_notebook(
     .await?;
 
     if !confirmed {
-        return get_remember_snapshot(state);
+        let snapshot = get_remember_snapshot(state)?;
+        restore_remember_window_focus(&app);
+        return Ok(snapshot);
     }
 
     let snapshot = {
@@ -559,6 +595,7 @@ async fn remember_forget_notebook(
         remember::snapshot(&remember_state)
     };
     emit_remember_changed(&app, &snapshot);
+    restore_remember_window_focus(&app);
     Ok(snapshot)
 }
 
@@ -595,7 +632,9 @@ async fn remember_reset_notebook(
     .await?;
 
     if !confirmed {
-        return get_remember_snapshot(state);
+        let snapshot = get_remember_snapshot(state)?;
+        restore_remember_window_focus(&app);
+        return Ok(snapshot);
     }
 
     let snapshot = {
@@ -607,6 +646,7 @@ async fn remember_reset_notebook(
         remember::snapshot(&remember_state)
     };
     emit_remember_changed(&app, &snapshot);
+    restore_remember_window_focus(&app);
     Ok(snapshot)
 }
 
@@ -629,6 +669,25 @@ async fn confirm_dialog(
     })
     .await
     .map_err(|err| err.to_string())
+}
+
+fn restore_remember_window_focus(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(REMEMBER_WINDOW) else {
+        return;
+    };
+
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+
+    #[cfg(target_os = "macos")]
+    {
+        let window = window.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(90));
+            let _ = window.set_focus();
+        });
+    }
 }
 
 fn set_pet_visible_inner(

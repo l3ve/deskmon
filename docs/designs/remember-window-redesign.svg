@@ -1,0 +1,128 @@
+<svg width="1100" height="760" viewBox="0 0 1100 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="windowShadow" x="-30" y="-24" width="1160" height="820" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#17251F" flood-opacity="0.16"/>
+    </filter>
+    <filter id="softShadow" x="-20" y="-20" width="760" height="680" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#1B3126" flood-opacity="0.10"/>
+    </filter>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1100" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FAF6"/>
+      <stop offset="0.52" stop-color="#EEF6F0"/>
+      <stop offset="1" stop-color="#F8F4EF"/>
+    </linearGradient>
+    <linearGradient id="selectedRow" x1="0" y1="0" x2="612" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E6F5EB"/>
+      <stop offset="1" stop-color="#F1FAF4"/>
+    </linearGradient>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+      .title { font-size: 34px; font-weight: 760; fill: #18241E; letter-spacing: 0; }
+      .subtitle { font-size: 15px; font-weight: 500; fill: #607068; letter-spacing: 0; }
+      .sectionTitle { font-size: 22px; font-weight: 760; fill: #1F2E26; letter-spacing: 0; }
+      .sectionMeta { font-size: 13px; font-weight: 600; fill: #7A8A82; letter-spacing: 0; }
+      .rowText { font-size: 16px; font-weight: 680; fill: #26372E; letter-spacing: 0; }
+      .rowSubtle { font-size: 13px; font-weight: 600; fill: #74847D; letter-spacing: 0; }
+      .detailTitle { font-size: 22px; font-weight: 760; fill: #1F2E26; letter-spacing: 0; }
+      .detailText { font-size: 17px; font-weight: 520; fill: #33443A; letter-spacing: 0; }
+      .buttonText { font-size: 13px; font-weight: 760; fill: #226A45; letter-spacing: 0; }
+      .dangerText { font-size: 13px; font-weight: 760; fill: #B83B3B; letter-spacing: 0; }
+      .chipText { font-size: 12px; font-weight: 760; fill: #28724B; letter-spacing: 0; }
+    </style>
+  </defs>
+
+  <rect width="1100" height="760" rx="18" fill="#DDE8E0"/>
+  <g filter="url(#windowShadow)" class="ui">
+    <rect x="18" y="16" width="1064" height="728" rx="16" fill="url(#pageBg)"/>
+    <rect x="18" y="16" width="1064" height="42" rx="16" fill="#FFFFFF" fill-opacity="0.88"/>
+    <rect x="18" y="46" width="1064" height="12" fill="#FFFFFF" fill-opacity="0.88"/>
+    <circle cx="43" cy="37" r="7.5" fill="#FF5F57"/>
+    <circle cx="66" cy="37" r="7.5" fill="#FFBD2E"/>
+    <circle cx="89" cy="37" r="7.5" fill="#28C840"/>
+    <text x="116" y="42" font-size="15" font-weight="700" fill="#313D36">记忆力</text>
+
+    <g transform="translate(50 90)">
+      <g transform="translate(0 0)">
+        <rect x="0" y="4" width="32" height="32" rx="7" fill="#DDF4E7"/>
+        <rect x="8" y="14" width="16" height="12" rx="3" fill="#46B47C"/>
+        <rect x="12" y="10" width="8" height="4" fill="#46B47C"/>
+        <rect x="11" y="17" width="3" height="3" fill="#123426"/>
+        <rect x="19" y="17" width="3" height="3" fill="#123426"/>
+        <rect x="12" y="24" width="10" height="2" fill="#2A7B52"/>
+      </g>
+      <text x="44" y="27" class="title">记忆力</text>
+      <text x="44" y="53" class="subtitle">记忆中 7/10 · 笔记本 5/50</text>
+    </g>
+
+    <g transform="translate(50 164)">
+      <g filter="url(#softShadow)">
+        <rect x="0" y="0" width="670" height="530" rx="10" fill="#FFFFFF" stroke="#D9E5DC"/>
+      </g>
+      <rect x="0.5" y="0.5" width="669" height="68" rx="9.5" fill="#FBFDFB"/>
+      <text x="26" y="42" class="sectionTitle">记忆中</text>
+      <text x="112" y="42" class="sectionMeta">临时想到的 7 条</text>
+      <line x1="0" y1="68" x2="670" y2="68" stroke="#E7EEE9"/>
+
+      <g transform="translate(22 88)">
+        <rect x="0" y="0" width="626" height="56" rx="8" fill="#FFFFFF"/>
+        <text x="16" y="34" class="rowText">🤖 AI / 大模型</text>
+      </g>
+      <g transform="translate(22 152)">
+        <rect x="0" y="0" width="626" height="64" rx="8" fill="url(#selectedRow)" stroke="#45B777" stroke-width="1.5"/>
+        <text x="16" y="27" class="rowText">而言，这意味着未来</text>
+        <text x="16" y="48" class="rowSubtle">点一下只查看，操作在右侧浮出</text>
+        <rect x="384" y="14" width="58" height="36" rx="18" fill="#FFFFFF" stroke="#BCE5CB"/>
+        <text x="399" y="37" class="buttonText">回忆</text>
+        <rect x="450" y="14" width="76" height="36" rx="18" fill="#FFFFFF" stroke="#BCE5CB"/>
+        <text x="468" y="37" class="buttonText">记住它</text>
+        <rect x="534" y="14" width="66" height="36" rx="18" fill="#FFF6F4" stroke="#F0C7C3"/>
+        <text x="553" y="37" class="dangerText">忘记</text>
+      </g>
+      <g transform="translate(22 224)">
+        <rect x="0" y="0" width="626" height="56" rx="8" fill="#FFFFFF"/>
+        <text x="16" y="34" class="rowText">对 Anthropic 高级模型 Fab...</text>
+      </g>
+      <g transform="translate(22 288)">
+        <rect x="0" y="0" width="626" height="56" rx="8" fill="#FFFFFF"/>
+        <text x="16" y="34" class="rowText">仅需要技术领先</text>
+      </g>
+      <g transform="translate(22 352)">
+        <rect x="0" y="0" width="626" height="56" rx="8" fill="#FFFFFF"/>
+        <text x="16" y="34" class="rowText">l3ve624@gmail.com</text>
+      </g>
+
+      <line x1="0" y1="408" x2="670" y2="408" stroke="#E7EEE9"/>
+      <text x="26" y="450" class="sectionTitle">笔记本</text>
+      <text x="110" y="450" class="sectionMeta">牢牢记下的 5 条</text>
+      <g transform="translate(22 466)">
+        <rect x="0" y="0" width="626" height="50" rx="8" fill="#F3F8F4"/>
+        <text x="16" y="31" class="rowText">l3ve624@gmail.com</text>
+        <rect x="526" y="12" width="58" height="26" rx="13" fill="#DBF3E6"/>
+        <text x="543" y="30" class="chipText">置顶</text>
+      </g>
+      <rect x="646" y="88" width="5" height="314" rx="2.5" fill="#DFEAE3"/>
+      <rect x="646" y="150" width="5" height="94" rx="2.5" fill="#9FCDB2"/>
+      <rect x="646" y="466" width="5" height="54" rx="2.5" fill="#DFEAE3"/>
+    </g>
+
+    <g transform="translate(742 164)" filter="url(#softShadow)">
+      <rect x="0" y="0" width="308" height="530" rx="10" fill="#FFFFFF" stroke="#D9E5DC"/>
+    </g>
+    <g transform="translate(742 164)" class="ui">
+      <rect x="0.5" y="0.5" width="307" height="68" rx="9.5" fill="#FBFDFB"/>
+      <text x="24" y="42" class="detailTitle">记忆中</text>
+      <rect x="214" y="20" width="70" height="28" rx="14" fill="#E6F5EB"/>
+      <text x="233" y="39" class="chipText">临时</text>
+      <line x1="0" y1="68" x2="308" y2="68" stroke="#E7EEE9"/>
+      <rect x="24" y="92" width="260" height="338" rx="8" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="44" y="132" class="detailText">而言，这意味着未来</text>
+      <text x="44" y="166" class="detailText">AI 产品的窗口不只是更大，</text>
+      <text x="44" y="200" class="detailText">也会更频繁地需要用户在</text>
+      <text x="44" y="234" class="detailText">上下文之间来回取回内容。</text>
+      <text x="44" y="286" class="detailText">这里保持只读，避免误编辑；</text>
+      <text x="44" y="320" class="detailText">真正的操作都藏在左侧条目里。</text>
+      <rect x="24" y="456" width="260" height="42" rx="8" fill="#F4F8F5"/>
+      <text x="42" y="482" font-size="14" font-weight="650" fill="#5F7168">已经放回剪贴板</text>
+    </g>
+  </g>
+</svg>
