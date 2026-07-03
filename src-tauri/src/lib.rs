@@ -531,6 +531,67 @@ fn remember_save_item(
     Ok(snapshot)
 }
 
+fn remember_save_current_clipboard(app: &AppHandle, state: &tauri::State<'_, AppState>) {
+    let notification_body = match arboard::Clipboard::new()
+        .ok()
+        .and_then(|mut clipboard| clipboard.get_text().ok())
+        .and_then(|text| remember::normalize_text(&text))
+    {
+        Some((text, truncated)) => {
+            let result = {
+                let mut remember_state = match state.remember.lock() {
+                    Ok(remember_state) => remember_state,
+                    Err(_) => {
+                        notify_remember(app, "Deskmon 暂时记不住这段文字");
+                        return;
+                    }
+                };
+                remember_state
+                    .save_entry(app, text, truncated)
+                    .map(|()| remember::snapshot(&remember_state))
+            };
+
+            match result {
+                Ok(snapshot) => {
+                    emit_remember_changed(app, &snapshot);
+                    if truncated {
+                        format!("Deskmon 记住了前 {} 个字", remember::TEXT_LIMIT)
+                    } else {
+                        "Deskmon 记住刚想到的了".to_string()
+                    }
+                }
+                Err(error) => remember_save_error_notification(&error).to_string(),
+            }
+        }
+        None => "Deskmon 没看到能记住的文字".to_string(),
+    };
+
+    notify_remember(app, &notification_body);
+}
+
+fn remember_save_error_notification(error: &str) -> &'static str {
+    if error.contains("笔记本已经满") {
+        "笔记本满啦，先忘记一些再记"
+    } else if error.contains("无法解密")
+        || error.contains("密钥")
+        || error.contains("数据损坏")
+        || error.contains("重置")
+    {
+        "笔记本打不开了，请到记忆力里重置"
+    } else {
+        "Deskmon 暂时记不住这段文字"
+    }
+}
+
+fn notify_remember(app: &AppHandle, body: &str) {
+    let _ = app
+        .notification()
+        .builder()
+        .title("Deskmon")
+        .body(body)
+        .show();
+}
+
 #[tauri::command]
 fn remember_forget_recent(
     app: AppHandle,
@@ -1071,6 +1132,8 @@ fn build_tray_menu(
     builder = builder
         .separator()
         .text("open_remember", "记忆力")
+        .text("remember_save_current_clipboard", "记住刚想到的")
+        .separator()
         .text("open_settings", "设置")
         .text("quit", "退出");
     builder.build().map_err(|err| err.to_string())
@@ -1294,6 +1357,9 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         }
         "open_remember" => {
             let _ = open_remember_window(app.clone());
+        }
+        "remember_save_current_clipboard" => {
+            remember_save_current_clipboard(app, &state);
         }
         "quit" => {
             app.exit(0);
