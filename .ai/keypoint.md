@@ -52,6 +52,7 @@
 - 宠物移动坐标按 native 物理像素处理；`petDimensions` 用于逻辑窗口/canvas 尺寸，`petWindowDimensions` 用于活动区域边界和拖拽/移动 clamp。
 - `move_pet_window` 只负责移动窗口和更新内存中的 `last_position`；磁盘持久化要低频 debounce 或通过 `persist_pet_position` 在拖拽结束/进入休息点显式触发。
 - 设置页连续保存要基于本地 draft preferences 合并，避免快速切换多个控件时后一个请求用旧 bootstrap 覆盖前一个字段。
+- MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。
 
 ## Known Issues
 
