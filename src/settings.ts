@@ -57,10 +57,23 @@ class SettingsController {
 
     const shell = element("section", "settings-shell");
     const header = element("header", "settings-header");
-    header.append(element("h1", "", "Deskmon 设置"));
+    const titleBlock = element("div", "settings-title-block");
+    titleBlock.append(element("span", "settings-app-mark"), element("h1", "", "偏好设置"));
+    header.append(titleBlock);
 
-    const controls = element("section", "settings-controls");
-    controls.append(
+    const sidebar = element("aside", "settings-sidebar");
+    sidebar.append(
+      element("p", "settings-sidebar-title", "Deskmon"),
+      this.summaryItem("尺寸", sizeLabels[settings.petSize]),
+      this.summaryItem("活跃", activityLabels[settings.activityLevel]),
+      this.summaryItem("置顶", settings.alwaysOnTop ? "开启" : "关闭"),
+      this.summaryItem("区域", this.customArea ? formatDimensions(this.customArea) : "默认"),
+    );
+
+    const controls = element("section", "settings-panel settings-controls");
+    controls.append(element("h2", "", "桌宠行为"));
+    const fields = element("div", "settings-fields");
+    fields.append(
       this.segmentedControl<PetSize>(
         "尺寸",
         settings.petSize,
@@ -79,8 +92,9 @@ class SettingsController {
         this.save({ alwaysOnTop }),
       ),
     );
+    controls.append(fields);
 
-    const areaPanel = element("section", "area-panel");
+    const areaPanel = element("section", "settings-panel area-panel");
     const areaHeader = element("div", "panel-header");
     areaHeader.append(element("h2", "", "活动区域"));
     const resetButton = element("button", "ghost-button", "重置默认");
@@ -99,9 +113,21 @@ class SettingsController {
     this.status.textContent = this.statusMessage ?? this.savedAreaMessage();
     areaPanel.append(areaHeader, canvasWrap, this.status);
 
-    shell.append(header, controls, areaPanel);
+    const content = element("main", "settings-content");
+    content.append(controls, areaPanel);
+
+    const workspace = element("div", "settings-workspace");
+    workspace.append(sidebar, content);
+
+    shell.append(header, workspace);
     this.root.append(shell);
     requestAnimationFrame(() => this.drawAreaCanvas());
+  }
+
+  private summaryItem(label: string, value: string): HTMLElement {
+    const item = element("div", "settings-summary-item");
+    item.append(element("span", "", label), element("strong", "", value));
+    return item;
   }
 
   private segmentedControl<T extends string>(

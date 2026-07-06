@@ -33,6 +33,7 @@ const SETTINGS_FILE: &str = "settings.json";
 const MIN_MARGIN: f64 = 24.0;
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
+const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -689,7 +690,7 @@ async fn remember_reset_notebook(
     let confirmed = confirm_dialog(
         app.clone(),
         "重置记忆力",
-        "笔记本会被清空，这些内容无法恢复。",
+        "笔记本和变量都会被清空，这些内容无法恢复。",
         "重置",
     )
     .await?;
@@ -713,19 +714,147 @@ async fn remember_reset_notebook(
     Ok(snapshot)
 }
 
+#[tauri::command]
+fn remember_create_variable(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    key: String,
+    value: String,
+    note: Option<String>,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.create_variable(&app, key, value, note)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    update_tray_menu(&app)?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn remember_update_variable(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    key: String,
+    value: String,
+    note: Option<String>,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.update_variable(&app, &id, key, value, note)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    update_tray_menu(&app)?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+async fn remember_delete_variable(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    let key = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.variable_key(&id).ok_or("没有找到这个变量")?
+    };
+    let confirmed = confirm_dialog(
+        app.clone(),
+        "删除变量",
+        format!("要让 Deskmon 忘记变量“{key}”吗？"),
+        "删除",
+    )
+    .await?;
+
+    if !confirmed {
+        let snapshot = get_remember_snapshot(state)?;
+        restore_remember_window_focus(&app);
+        return Ok(snapshot);
+    }
+
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.delete_variable(&app, &id)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    update_tray_menu(&app)?;
+    restore_remember_window_focus(&app);
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn remember_copy_variable(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<remember::RememberSnapshot, String> {
+    remember_copy_variable_inner(&app, &state, &id)
+}
+
+#[tauri::command]
+fn remember_reveal_variable_value(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<String, String> {
+    let remember_state = state
+        .remember
+        .lock()
+        .map_err(|_| "remember lock poisoned")?;
+    remember_state
+        .variable_value(&id)
+        .ok_or("没有找到这个变量".into())
+}
+
+#[tauri::command]
+fn remember_set_variable_clipboard_cleanup_enabled(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+) -> Result<remember::RememberSnapshot, String> {
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.set_variable_clipboard_cleanup_enabled(&app, enabled)?;
+        remember::snapshot(&remember_state)
+    };
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
+}
+
 async fn confirm_dialog(
     app: AppHandle,
-    title: &'static str,
-    message: &'static str,
-    confirm_label: &'static str,
+    title: impl Into<String>,
+    message: impl Into<String>,
+    confirm_label: impl Into<String>,
 ) -> Result<bool, String> {
+    let title = title.into();
+    let message = message.into();
+    let confirm_label = confirm_label.into();
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .message(message)
             .title(title)
             .kind(MessageDialogKind::Warning)
             .buttons(MessageDialogButtons::OkCancelCustom(
-                confirm_label.into(),
+                confirm_label,
                 "取消".into(),
             ))
             .blocking_show()
@@ -992,6 +1121,70 @@ fn remember_reset_clipboard_inner(
     Ok(snapshot)
 }
 
+fn remember_copy_variable_inner(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    id: &str,
+) -> Result<remember::RememberSnapshot, String> {
+    let (key, value, cleanup_enabled) = {
+        let remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        let key = remember_state.variable_key(id).ok_or("没有找到这个变量")?;
+        let value = remember_state
+            .variable_value(id)
+            .ok_or("没有找到这个变量")?;
+        (
+            key,
+            value,
+            remember_state.variable_clipboard_cleanup_enabled,
+        )
+    };
+
+    let snapshot = {
+        let mut remember_state = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember_state.clipboard_initialized = true;
+        remember_state.last_clipboard_text = Some(value.clone());
+        remember::snapshot(&remember_state)
+    };
+    set_clipboard_text(&value)?;
+    emit_remember_changed(app, &snapshot);
+    if cleanup_enabled {
+        spawn_variable_clipboard_cleanup(app.clone(), value);
+    }
+    notify_remember(app, &format!("已复制变量“{key}”"));
+    Ok(snapshot)
+}
+
+fn spawn_variable_clipboard_cleanup(app: AppHandle, value: String) {
+    thread::spawn(move || {
+        let mut clipboard = match arboard::Clipboard::new() {
+            Ok(clipboard) => clipboard,
+            Err(_) => return,
+        };
+        for _ in 0..(VARIABLE_CLIPBOARD_CLEANUP_SECONDS * 1000 / CLIPBOARD_POLL_INTERVAL_MS) {
+            thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
+            match clipboard.get_text() {
+                Ok(current) if current == value => {}
+                _ => return,
+            }
+        }
+        if matches!(clipboard.get_text(), Ok(current) if current == value) {
+            let _ = clipboard.set_text(String::new());
+            if let Some(state) = app.try_state::<AppState>() {
+                if let Ok(mut remember_state) = state.remember.lock() {
+                    remember_state.clipboard_initialized = true;
+                    remember_state.last_clipboard_text = None;
+                }
+            }
+        }
+    });
+}
+
 fn set_clipboard_text(text: &str) -> Result<(), String> {
     arboard::Clipboard::new()
         .map_err(|err| err.to_string())?
@@ -1212,9 +1405,12 @@ fn build_remember_reset_submenu(
         build_remember_entries_submenu(app, "记忆中", "remember_recent_", &snapshot.recent)?;
     let notebook =
         build_remember_entries_submenu(app, "笔记本", "remember_notebook_", &snapshot.notebook)?;
+    let variables =
+        build_remember_variable_submenu(app, "变量", "remember_variable_", &snapshot.variables)?;
     SubmenuBuilder::new(app, "回忆")
         .item(&recent)
         .item(&notebook)
+        .item(&variables)
         .build()
         .map_err(|err| err.to_string())
 }
@@ -1243,6 +1439,31 @@ fn build_remember_entries_submenu(
                 format!("{id_prefix}{}", entry.id),
                 format!("{pinned_mark}{}", entry.preview),
             );
+        }
+    }
+    builder.build().map_err(|err| err.to_string())
+}
+
+fn build_remember_variable_submenu(
+    app: &AppHandle,
+    label: &str,
+    id_prefix: &str,
+    entries: &[remember::RememberVariablePayload],
+) -> Result<Submenu<tauri::Wry>, String> {
+    let mut builder = SubmenuBuilder::new(app, label);
+    if entries.is_empty() {
+        let item = MenuItem::with_id(
+            app,
+            format!("{id_prefix}empty"),
+            "还没有",
+            false,
+            None::<&str>,
+        )
+        .map_err(|err| err.to_string())?;
+        builder = builder.item(&item);
+    } else {
+        for entry in entries {
+            builder = builder.text(format!("{id_prefix}{}", entry.id), entry.key.clone());
         }
     }
     builder.build().map_err(|err| err.to_string())
@@ -1320,6 +1541,12 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     if let Some(id) = event_id.strip_prefix("remember_notebook_") {
         if id != "empty" {
             let _ = remember_reset_clipboard_inner(app, &state, "notebook", id);
+        }
+        return;
+    }
+    if let Some(id) = event_id.strip_prefix("remember_variable_") {
+        if id != "empty" {
+            let _ = remember_copy_variable_inner(app, &state, id);
         }
         return;
     }
@@ -1674,7 +1901,13 @@ pub fn run() {
             remember_clear_recent,
             remember_forget_notebook,
             remember_set_notebook_pinned,
-            remember_reset_notebook
+            remember_reset_notebook,
+            remember_create_variable,
+            remember_update_variable,
+            remember_delete_variable,
+            remember_copy_variable,
+            remember_reveal_variable_value,
+            remember_set_variable_clipboard_cleanup_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
