@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 
 pub const RECENT_LIMIT: usize = 10;
 pub const NOTEBOOK_LIMIT: usize = 50;
+pub const VARIABLE_LIMIT: usize = 50;
 pub const TEXT_LIMIT: usize = 5000;
 pub const PREVIEW_CHARS: usize = 20;
 
@@ -40,6 +41,17 @@ pub struct NotebookEntry {
     pub truncated: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariableEntry {
+    pub id: String,
+    pub key: String,
+    pub value: String,
+    pub note: Option<String>,
+    #[serde(default)]
+    pub order: u64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RememberItemPayload {
@@ -52,12 +64,23 @@ pub struct RememberItemPayload {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RememberVariablePayload {
+    pub id: String,
+    pub key: String,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RememberSnapshot {
     pub recent: Vec<RememberItemPayload>,
     pub notebook: Vec<RememberItemPayload>,
+    pub variables: Vec<RememberVariablePayload>,
     pub error: Option<String>,
     pub recent_limit: usize,
     pub notebook_limit: usize,
+    pub variable_limit: usize,
+    pub variable_clipboard_cleanup_enabled: bool,
     pub text_limit: usize,
     pub preview_chars: usize,
 }
@@ -66,16 +89,23 @@ pub struct RememberSnapshot {
 pub struct RememberState {
     pub recent: Vec<RecentEntry>,
     pub notebook: Vec<NotebookEntry>,
+    pub variables: Vec<VariableEntry>,
+    pub variable_clipboard_cleanup_enabled: bool,
     pub load_error: Option<String>,
     pub clipboard_initialized: bool,
     pub last_clipboard_text: Option<String>,
     next_order: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct PersistedNotebook {
+struct PersistedRememberData {
+    #[serde(default)]
     notebook: Vec<NotebookEntry>,
+    #[serde(default)]
+    variables: Vec<VariableEntry>,
+    #[serde(default)]
+    variable_clipboard_cleanup_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,15 +117,21 @@ struct EncryptedNotebookFile {
 }
 
 pub fn load(app: &AppHandle) -> RememberState {
-    let (notebook, load_error) = load_notebook(app);
-    let next_order = notebook
+    let (mut data, load_error) = load_remember_data(app);
+    normalize_notebook_orders(&mut data.notebook);
+    normalize_variable_orders(&mut data.variables);
+    let next_order = data
+        .notebook
         .iter()
         .flat_map(|entry| [Some(entry.saved_order), entry.pinned_order])
         .flatten()
+        .chain(data.variables.iter().map(|entry| entry.order))
         .max()
         .unwrap_or(0);
     RememberState {
-        notebook,
+        notebook: data.notebook,
+        variables: data.variables,
+        variable_clipboard_cleanup_enabled: data.variable_clipboard_cleanup_enabled,
         load_error,
         next_order,
         ..RememberState::default()
@@ -145,9 +181,20 @@ pub fn snapshot(state: &RememberState) -> RememberSnapshot {
                 truncated: entry.truncated,
             })
             .collect(),
+        variables: state
+            .variables
+            .iter()
+            .map(|entry| RememberVariablePayload {
+                id: entry.id.clone(),
+                key: entry.key.clone(),
+                note: entry.note.clone(),
+            })
+            .collect(),
         error: state.load_error.clone(),
         recent_limit: RECENT_LIMIT,
         notebook_limit: NOTEBOOK_LIMIT,
+        variable_limit: VARIABLE_LIMIT,
+        variable_clipboard_cleanup_enabled: state.variable_clipboard_cleanup_enabled,
         text_limit: TEXT_LIMIT,
         preview_chars: PREVIEW_CHARS,
     }
@@ -200,6 +247,20 @@ impl RememberState {
         }
     }
 
+    pub fn variable_value(&self, id: &str) -> Option<String> {
+        self.variables
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.value.clone())
+    }
+
+    pub fn variable_key(&self, id: &str) -> Option<String> {
+        self.variables
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.key.clone())
+    }
+
     pub fn save_entry(
         &mut self,
         app: &AppHandle,
@@ -215,7 +276,7 @@ impl RememberState {
             entry.saved_order = order;
             entry.truncated = truncated;
             sort_notebook(&mut self.notebook);
-            return persist_notebook(app, &self.notebook);
+            return self.persist(app);
         }
 
         if self.notebook.len() >= NOTEBOOK_LIMIT {
@@ -231,7 +292,7 @@ impl RememberState {
         };
         self.notebook.push(entry);
         sort_notebook(&mut self.notebook);
-        persist_notebook(app, &self.notebook)
+        self.persist(app)
     }
 
     pub fn forget_recent(&mut self, id: &str) {
@@ -244,7 +305,7 @@ impl RememberState {
 
     pub fn forget_notebook(&mut self, app: &AppHandle, id: &str) -> Result<(), String> {
         self.notebook.retain(|entry| entry.id != id);
-        persist_notebook(app, &self.notebook)
+        self.persist(app)
     }
 
     pub fn set_notebook_pinned(
@@ -254,7 +315,7 @@ impl RememberState {
         pinned: bool,
     ) -> Result<(), String> {
         self.update_notebook_pinned(id, pinned)?;
-        persist_notebook(app, &self.notebook)
+        self.persist(app)
     }
 
     fn update_notebook_pinned(&mut self, id: &str, pinned: bool) -> Result<(), String> {
@@ -280,8 +341,116 @@ impl RememberState {
     pub fn reset_notebook(&mut self, app: &AppHandle) -> Result<(), String> {
         remove_notebook_files(app)?;
         self.notebook.clear();
+        self.variables.clear();
+        self.variable_clipboard_cleanup_enabled = false;
         self.load_error = None;
         Ok(())
+    }
+
+    pub fn create_variable(
+        &mut self,
+        app: &AppHandle,
+        key: String,
+        value: String,
+        note: Option<String>,
+    ) -> Result<String, String> {
+        if self.load_error.is_some() {
+            return Err("记忆力数据无法解密，请先重置后再继续".into());
+        }
+
+        let key = normalize_variable_key(&key)?;
+        let value = normalize_variable_value(&value)?;
+        let note = normalize_variable_note(note);
+
+        if self
+            .variables
+            .iter()
+            .any(|entry| entry.key.eq_ignore_ascii_case(&key))
+        {
+            return Err("这个 key 已经存在了".into());
+        }
+        if self.variables.len() >= VARIABLE_LIMIT {
+            return Err("变量已经满了，请先删除不需要的变量".into());
+        }
+
+        let id = self.next_id("variable");
+        let entry = VariableEntry {
+            id: id.clone(),
+            key,
+            value,
+            note,
+            order: self.next_order(),
+        };
+        self.variables.push(entry);
+        sort_variables(&mut self.variables);
+        self.persist(app)?;
+        Ok(id)
+    }
+
+    pub fn update_variable(
+        &mut self,
+        app: &AppHandle,
+        id: &str,
+        key: String,
+        value: String,
+        note: Option<String>,
+    ) -> Result<(), String> {
+        if self.load_error.is_some() {
+            return Err("记忆力数据无法解密，请先重置后再继续".into());
+        }
+
+        let key = normalize_variable_key(&key)?;
+        let value = normalize_variable_value(&value)?;
+        let note = normalize_variable_note(note);
+
+        if self
+            .variables
+            .iter()
+            .any(|entry| entry.id != id && entry.key.eq_ignore_ascii_case(&key))
+        {
+            return Err("这个 key 已经存在了".into());
+        }
+
+        let Some(index) = self.variables.iter().position(|entry| entry.id == id) else {
+            return Err("没有找到这个变量".into());
+        };
+
+        let order = self.next_order();
+        self.variables[index].key = key;
+        self.variables[index].value = value;
+        self.variables[index].note = note;
+        self.variables[index].order = order;
+        sort_variables(&mut self.variables);
+        self.persist(app)
+    }
+
+    pub fn delete_variable(&mut self, app: &AppHandle, id: &str) -> Result<(), String> {
+        let before = self.variables.len();
+        self.variables.retain(|entry| entry.id != id);
+        if self.variables.len() == before {
+            return Err("没有找到这个变量".into());
+        }
+        self.persist(app)
+    }
+
+    pub fn set_variable_clipboard_cleanup_enabled(
+        &mut self,
+        app: &AppHandle,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.variable_clipboard_cleanup_enabled = enabled;
+        self.persist(app)
+    }
+
+    fn persist(&self, app: &AppHandle) -> Result<(), String> {
+        persist_remember_data(
+            app,
+            &PersistedRememberData {
+                notebook: self.notebook.clone(),
+                variables: self.variables.clone(),
+                variable_clipboard_cleanup_enabled: self.variable_clipboard_cleanup_enabled,
+            },
+        )
     }
 
     fn next_id(&mut self, prefix: &str) -> String {
@@ -306,12 +475,51 @@ fn sort_notebook(notebook: &mut [NotebookEntry]) {
     });
 }
 
-fn load_notebook(app: &AppHandle) -> (Vec<NotebookEntry>, Option<String>) {
+fn sort_variables(variables: &mut [VariableEntry]) {
+    variables.sort_by(|left, right| {
+        right
+            .order
+            .cmp(&left.order)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+}
+
+fn normalize_variable_key(key: &str) -> Result<String, String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("key 不能为空".into());
+    }
+    Ok(key.to_string())
+}
+
+fn normalize_variable_value(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("value 不能为空".into());
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_variable_note(note: Option<String>) -> Option<String> {
+    note.and_then(|note| {
+        let note = note.trim();
+        if note.is_empty() {
+            None
+        } else {
+            Some(note.to_string())
+        }
+    })
+}
+
+fn load_remember_data(app: &AppHandle) -> (PersistedRememberData, Option<String>) {
     let Ok(data_path) = data_path(app) else {
-        return (Vec::new(), Some("无法访问 Deskmon 配置目录".into()));
+        return (
+            PersistedRememberData::default(),
+            Some("无法访问 Deskmon 配置目录".into()),
+        );
     };
     if !data_path.exists() {
-        return (Vec::new(), None);
+        return (PersistedRememberData::default(), None);
     }
 
     let encrypted = match fs::read_to_string(&data_path)
@@ -320,31 +528,40 @@ fn load_notebook(app: &AppHandle) -> (Vec<NotebookEntry>, Option<String>) {
             serde_json::from_str::<EncryptedNotebookFile>(&raw).map_err(|err| err.to_string())
         }) {
         Ok(file) => file,
-        Err(error) => return (Vec::new(), Some(format!("笔记本数据损坏：{error}"))),
+        Err(error) => {
+            return (
+                PersistedRememberData::default(),
+                Some(format!("记忆力数据损坏：{error}")),
+            )
+        }
     };
 
     if encrypted.version != ENCRYPTED_DATA_VERSION {
-        return (Vec::new(), Some("笔记本数据版本暂不支持".into()));
+        return (
+            PersistedRememberData::default(),
+            Some("记忆力数据版本暂不支持".into()),
+        );
     }
 
     let key = match read_existing_key(app) {
         Ok(key) => key,
-        Err(error) => return (Vec::new(), Some(error)),
+        Err(error) => return (PersistedRememberData::default(), Some(error)),
     };
 
-    match decrypt_notebook(&key, encrypted) {
-        Ok(mut notebook) => {
-            normalize_notebook_orders(&mut notebook);
-            let _ = persist_notebook(app, &notebook);
-            (notebook, None)
+    match decrypt_remember_data(&key, encrypted) {
+        Ok(mut data) => {
+            normalize_notebook_orders(&mut data.notebook);
+            normalize_variable_orders(&mut data.variables);
+            let _ = persist_remember_data(app, &data);
+            (data, None)
         }
-        Err(error) => (Vec::new(), Some(error)),
+        Err(error) => (PersistedRememberData::default(), Some(error)),
     }
 }
 
-fn persist_notebook(app: &AppHandle, notebook: &[NotebookEntry]) -> Result<(), String> {
+fn persist_remember_data(app: &AppHandle, data: &PersistedRememberData) -> Result<(), String> {
     let key = ensure_key(app)?;
-    let encrypted = encrypt_notebook(&key, notebook)?;
+    let encrypted = encrypt_remember_data(&key, data)?;
     let raw = serde_json::to_vec_pretty(&encrypted).map_err(|err| err.to_string())?;
     let path = data_path(app)?;
     if let Some(parent) = path.parent() {
@@ -353,13 +570,10 @@ fn persist_notebook(app: &AppHandle, notebook: &[NotebookEntry]) -> Result<(), S
     fs::write(path, raw).map_err(|err| err.to_string())
 }
 
-fn encrypt_notebook(
+fn encrypt_remember_data(
     key: &[u8; KEY_LEN],
-    notebook: &[NotebookEntry],
+    data: &PersistedRememberData,
 ) -> Result<EncryptedNotebookFile, String> {
-    let data = PersistedNotebook {
-        notebook: notebook.to_vec(),
-    };
     let plaintext = serde_json::to_vec(&data).map_err(|err| err.to_string())?;
     let mut nonce = [0_u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce);
@@ -367,7 +581,7 @@ fn encrypt_notebook(
     let cipher = ChaCha20Poly1305::new_from_slice(key).expect("remember key length is fixed");
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
-        .map_err(|_| "笔记本加密失败".to_string())?;
+        .map_err(|_| "记忆力加密失败".to_string())?;
     Ok(EncryptedNotebookFile {
         version: ENCRYPTED_DATA_VERSION,
         nonce: general_purpose::STANDARD.encode(nonce),
@@ -375,29 +589,41 @@ fn encrypt_notebook(
     })
 }
 
-fn decrypt_notebook(
+fn decrypt_remember_data(
     key: &[u8; KEY_LEN],
     encrypted: EncryptedNotebookFile,
-) -> Result<Vec<NotebookEntry>, String> {
+) -> Result<PersistedRememberData, String> {
     let nonce = match general_purpose::STANDARD.decode(encrypted.nonce) {
         Ok(nonce) if nonce.len() == NONCE_LEN => nonce,
-        Ok(_) => return Err("笔记本数据损坏：nonce 长度不正确".into()),
-        Err(error) => return Err(format!("笔记本数据损坏：{error}")),
+        Ok(_) => return Err("记忆力数据损坏：nonce 长度不正确".into()),
+        Err(error) => return Err(format!("记忆力数据损坏：{error}")),
     };
     let ciphertext = match general_purpose::STANDARD.decode(encrypted.ciphertext) {
         Ok(ciphertext) => ciphertext,
-        Err(error) => return Err(format!("笔记本数据损坏：{error}")),
+        Err(error) => return Err(format!("记忆力数据损坏：{error}")),
     };
 
     let cipher = ChaCha20Poly1305::new_from_slice(key).expect("remember key length is fixed");
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
-        .map_err(|_| "笔记本无法解密，请重置后再继续".to_string())?;
-    let persisted = serde_json::from_slice::<PersistedNotebook>(&plaintext)
-        .map_err(|error| format!("笔记本数据损坏：{error}"))?;
-    let mut notebook = persisted.notebook;
-    sort_notebook(&mut notebook);
-    Ok(notebook)
+        .map_err(|_| "记忆力无法解密，请重置后再继续".to_string())?;
+    let mut persisted = decode_remember_plaintext(&plaintext)?;
+    sort_notebook(&mut persisted.notebook);
+    sort_variables(&mut persisted.variables);
+    Ok(persisted)
+}
+
+fn decode_remember_plaintext(plaintext: &[u8]) -> Result<PersistedRememberData, String> {
+    match serde_json::from_slice::<PersistedRememberData>(plaintext) {
+        Ok(data) => Ok(data),
+        Err(new_error) => match serde_json::from_slice::<Vec<NotebookEntry>>(plaintext) {
+            Ok(notebook) => Ok(PersistedRememberData {
+                notebook,
+                ..PersistedRememberData::default()
+            }),
+            Err(_) => Err(format!("记忆力数据损坏：{new_error}")),
+        },
+    }
 }
 
 fn normalize_notebook_orders(notebook: &mut [NotebookEntry]) {
@@ -410,6 +636,17 @@ fn normalize_notebook_orders(notebook: &mut [NotebookEntry]) {
             entry.pinned_order = Some(order);
         }
     }
+}
+
+fn normalize_variable_orders(variables: &mut [VariableEntry]) {
+    sort_variables(variables);
+    let len = variables.len() as u64;
+    for (index, entry) in variables.iter_mut().enumerate() {
+        if entry.order == 0 {
+            entry.order = len.saturating_sub(index as u64);
+        }
+    }
+    sort_variables(variables);
 }
 
 fn ensure_key(app: &AppHandle) -> Result<[u8; KEY_LEN], String> {
@@ -615,26 +852,42 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_notebook_does_not_store_plaintext_and_roundtrips() {
+    fn encrypted_remember_data_does_not_store_plaintext_and_roundtrips() {
         let key = [7_u8; KEY_LEN];
-        let notebook = vec![NotebookEntry {
-            id: "secret-id".into(),
-            text: "very secret text".into(),
-            saved_order: 123,
-            pinned_order: Some(456),
-            truncated: false,
-        }];
+        let data = PersistedRememberData {
+            notebook: vec![NotebookEntry {
+                id: "secret-id".into(),
+                text: "very secret text".into(),
+                saved_order: 123,
+                pinned_order: Some(456),
+                truncated: false,
+            }],
+            variables: vec![VariableEntry {
+                id: "variable-id".into(),
+                key: "api_token".into(),
+                value: "secret variable value".into(),
+                note: Some("production".into()),
+                order: 789,
+            }],
+            variable_clipboard_cleanup_enabled: true,
+        };
 
-        let encrypted = encrypt_notebook(&key, &notebook).expect("encrypts notebook");
+        let encrypted = encrypt_remember_data(&key, &data).expect("encrypts remember data");
         let raw = serde_json::to_string(&encrypted).expect("serializes encrypted notebook");
 
         assert!(!raw.contains("very secret text"));
         assert!(!raw.contains("secret-id"));
+        assert!(!raw.contains("secret variable value"));
+        assert!(!raw.contains("api_token"));
 
-        let restored = decrypt_notebook(&key, encrypted).expect("decrypts notebook");
-        assert_eq!(restored.len(), 1);
-        assert_eq!(restored[0].text, "very secret text");
-        assert_eq!(restored[0].pinned_order, Some(456));
+        let restored = decrypt_remember_data(&key, encrypted).expect("decrypts remember data");
+        assert_eq!(restored.notebook.len(), 1);
+        assert_eq!(restored.notebook[0].text, "very secret text");
+        assert_eq!(restored.notebook[0].pinned_order, Some(456));
+        assert_eq!(restored.variables.len(), 1);
+        assert_eq!(restored.variables[0].key, "api_token");
+        assert_eq!(restored.variables[0].value, "secret variable value");
+        assert!(restored.variable_clipboard_cleanup_enabled);
     }
 
     #[test]
@@ -654,20 +907,90 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_notebook_rejects_wrong_key() {
-        let key = [1_u8; KEY_LEN];
-        let wrong_key = [2_u8; KEY_LEN];
+    fn encrypted_legacy_notebook_array_roundtrips_into_new_data_shape() {
+        let key = [9_u8; KEY_LEN];
         let notebook = vec![NotebookEntry {
-            id: "id".into(),
-            text: "text".into(),
-            saved_order: 1,
+            id: "legacy-id".into(),
+            text: "legacy text".into(),
+            saved_order: 10,
             pinned_order: None,
             truncated: false,
         }];
-        let encrypted = encrypt_notebook(&key, &notebook).expect("encrypts notebook");
+        let plaintext = serde_json::to_vec(&notebook).expect("serializes legacy notebook");
+        let encrypted = encrypt_plaintext_for_test(&key, &plaintext);
 
-        let result = decrypt_notebook(&wrong_key, encrypted);
+        let restored = decrypt_remember_data(&key, encrypted).expect("decrypts legacy notebook");
+
+        assert_eq!(restored.notebook.len(), 1);
+        assert_eq!(restored.notebook[0].text, "legacy text");
+        assert!(restored.variables.is_empty());
+        assert!(!restored.variable_clipboard_cleanup_enabled);
+    }
+
+    #[test]
+    fn variable_snapshot_does_not_expose_value() {
+        let state = RememberState {
+            variables: vec![VariableEntry {
+                id: "variable-id".into(),
+                key: "api_token".into(),
+                value: "must never appear".into(),
+                note: Some("service key".into()),
+                order: 1,
+            }],
+            ..RememberState::default()
+        };
+
+        let raw = serde_json::to_string(&snapshot(&state)).expect("serializes snapshot");
+
+        assert!(raw.contains("api_token"));
+        assert!(raw.contains("service key"));
+        assert!(!raw.contains("must never appear"));
+    }
+
+    #[test]
+    fn variable_fields_trim_and_reject_empty_required_values() {
+        assert_eq!(normalize_variable_key("  token  "), Ok("token".into()));
+        assert_eq!(normalize_variable_value("  secret  "), Ok("secret".into()));
+        assert_eq!(
+            normalize_variable_note(Some("  production  ".into())),
+            Some("production".into())
+        );
+        assert_eq!(normalize_variable_note(Some("   ".into())), None);
+        assert!(normalize_variable_key("   ").is_err());
+        assert!(normalize_variable_value("\n\t").is_err());
+    }
+
+    #[test]
+    fn encrypted_remember_data_rejects_wrong_key() {
+        let key = [1_u8; KEY_LEN];
+        let wrong_key = [2_u8; KEY_LEN];
+        let data = PersistedRememberData {
+            notebook: vec![NotebookEntry {
+                id: "id".into(),
+                text: "text".into(),
+                saved_order: 1,
+                pinned_order: None,
+                truncated: false,
+            }],
+            ..PersistedRememberData::default()
+        };
+        let encrypted = encrypt_remember_data(&key, &data).expect("encrypts remember data");
+
+        let result = decrypt_remember_data(&wrong_key, encrypted);
 
         assert!(result.is_err());
+    }
+
+    fn encrypt_plaintext_for_test(key: &[u8; KEY_LEN], plaintext: &[u8]) -> EncryptedNotebookFile {
+        let nonce = [3_u8; NONCE_LEN];
+        let cipher = ChaCha20Poly1305::new_from_slice(key).expect("remember key length is fixed");
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext)
+            .expect("encrypts plaintext");
+        EncryptedNotebookFile {
+            version: ENCRYPTED_DATA_VERSION,
+            nonce: general_purpose::STANDARD.encode(nonce),
+            ciphertext: general_purpose::STANDARD.encode(ciphertext),
+        }
     }
 }

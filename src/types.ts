@@ -72,12 +72,21 @@ export interface RememberItem {
   truncated: boolean;
 }
 
+export interface RememberVariableItem {
+  id: string;
+  key: string;
+  note: string | null;
+}
+
 export interface RememberSnapshot {
   recent: RememberItem[];
   notebook: RememberItem[];
+  variables: RememberVariableItem[];
   error: string | null;
   recentLimit: number;
   notebookLimit: number;
+  variableLimit: number;
+  variableClipboardCleanupEnabled: boolean;
   textLimit: number;
   previewChars: number;
 }
