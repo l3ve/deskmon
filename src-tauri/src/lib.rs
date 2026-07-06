@@ -9,6 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
+    image::Image,
     menu::{Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder},
     tray::TrayIconBuilder,
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewUrl,
@@ -25,6 +26,7 @@ const REMEMBER_WINDOW_HEIGHT: f64 = 620.0;
 const REMEMBER_WINDOW_MIN_WIDTH: f64 = 780.0;
 const REMEMBER_WINDOW_MIN_HEIGHT: f64 = 520.0;
 const TRAY_ID: &str = "deskmon-tray";
+const TRAY_ICON: &[u8] = include_bytes!("../assets/tray-icon.png");
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
 const SETTINGS_FILE: &str = "settings.json";
@@ -1059,14 +1061,13 @@ fn create_pet_window(app: &tauri::App) -> Result<(), String> {
 fn create_tray(app: &tauri::App) -> Result<(), String> {
     let state = app.state::<AppState>();
     let menu = build_tray_menu(app.handle(), &state)?;
-    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
+    let tray_icon = Image::from_bytes(TRAY_ICON).map_err(|err| err.to_string())?;
+    let builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Deskmon")
         .menu(&menu)
-        .show_menu_on_left_click(true);
-
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone()).icon_as_template(true);
-    }
+        .show_menu_on_left_click(true)
+        .icon(tray_icon)
+        .icon_as_template(true);
 
     builder.build(app).map_err(|err| err.to_string())?;
     Ok(())
