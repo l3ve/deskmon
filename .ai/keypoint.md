@@ -5,10 +5,17 @@
 - `src/pet.ts`: 桌宠渲染、拖拽、悬停暂停和右键触发原生小菜单。
 - `src/assets/slime/*.png`: 默认史莱姆 7 个状态的 sprite sheet 素材。
 - `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态和配置持久化。
+- `src-tauri/assets/tray-icon.png`: macOS 菜单栏专用 template 图标，编译进 Rust，不放进 `src-tauri/icons`。
 - `src-tauri/src/remember.rs`: “记忆力”状态、文本规范化、笔记本加密/解密和核心规则测试。
 - `src/remember.ts`: “记忆力”窗口前端，负责记忆中/笔记本列表、详情和管理操作。
 - `docs/prds/001-tauri-mac-desktop-pet.md`: V1 产品边界和交互规格。
 - `docs/prds/002-remember-clipboard-history.md`: “记忆力”剪贴板历史功能边界和实现决策。
+- `docs/prds/003-remember-variable-library.md`: “记忆力”变量库的 key/value 私密取出、搜索和自动清理边界。
+- `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
+- `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
+- `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
+- `docs/designs/remember-variable-library-ui-flow.png`: “记忆力”变量库完整交互状态预览图。
+- `docs/designs/remember-variable-library-ui.md`: “记忆力”变量库 UI 信息架构和交互状态说明。
 - `docs/qa/v1-smoke-checklist.md`: V1 发布前手工 smoke test 清单。
 
 ## Important Decisions
@@ -19,6 +26,7 @@
 - 宠物小菜单使用 macOS 原生弹出菜单，不使用前端自绘菜单作为常规交互。
 - 原生菜单倒计时用 `MenuItem::set_text` 更新已有菜单项文本，避免整棵菜单重建。
 - 菜单栏提供“移回活动区域”；该入口会显示宠物、移到当前活动区域内并持久化位置，宠物小菜单保持轻量不放归位入口。
+- 菜单栏托盘图标使用独立的 32x32 template PNG，通过 `include_bytes!` 接入；主体非透明边界约 28x28，应用图标和托盘图标不要共用同一张彩色 icon。
 - 设置页活动区域框选在拖动阶段先限制在默认活动区域内，并即时提示尺寸/最小尺寸/保存状态；后端仍用 `normalize_activity_area` 兜底。
 - “记忆力”剪贴板历史是 001 后的独立功能；只支持纯文本，菜单栏入口叫“记忆力”，宠物小菜单轻量入口叫“回忆”。
 - “记忆中”是运行期临时历史，最多 10 条，不落盘；“笔记本”是用户主动保存的持久历史，最多 50 条。
@@ -40,7 +48,16 @@
 - “记忆力”窗口的回忆/记住/忘记/置顶操作放在左侧条目 hover/focus 操作区，右侧详情区只用于查看完整内容。
 - “记忆力”窗口不放手动刷新和“全部忘记”按钮；内容刷新依靠事件同步，“记忆中”只做单条忘记。
 - “记忆力”窗口的“记忆中”分组说明使用“临时想到的 N 条”，不要再用“临时捧着”。
+- “变量库”是“记忆力”的第三个分组，和“记忆中”“笔记本”分开建模，但取出入口统一走“回忆”。
+- “变量库”条目使用 key/value/note；key 必填且唯一，value 必填，note 可选，最多 50 条。
+- “变量库”全部默认按私密值处理；列表、小菜单、确认文案和复制反馈只显示 key，不显示 value。
+- 变量 value 只能在“记忆力”窗口详情区临时显示；切换条目、关闭窗口或状态刷新后要重新隐藏。
+- 复制变量只把 value 写入剪贴板，不自动粘贴，也不把 value 主动加入“记忆中”。
+- 变量复制后的自动清理是全局开关；开启后 30 秒内若剪贴板变成其他内容则取消，到期仍匹配本次 value 才清空。
+- “记忆力”搜索覆盖“记忆中”“笔记本”“变量库”，但变量只搜索 key 和 note，不搜索 value。
+- 删除变量需要系统原生确认，确认文案只显示 key，并沿用确认后恢复“记忆力”窗口焦点的规则。
 - 默认皮肤优先使用 7 个状态 sprite sheet，代码绘制史莱姆保留为加载兜底。
+- `src-tauri/icons` 只保留 `tauri.conf.json` 的 `bundle.icon` 声明项：`32x32.png`、`128x128.png`、`128x128@2x.png`、`icon.icns`、`icon.ico`。
 - `idle/sleep/timer-waiting/celebrate/dragged` 当前按 6x1 切帧，`walk/run` 按 6x2 切帧。
 - `walk/run` 的 6x2 帧表按方向分行播放：walk 第 0 行向左、第 1 行向右；run 第 0 行向右、第 1 行向左，不能把两行当连续 12 帧循环。
 - `walk/run` 当前播放速度为 walk 5fps、run 8fps，避免 6 帧动作切换过快。
@@ -69,3 +86,8 @@
 - 不要在每次自主移动 tick 里写 `settings.json` 或重复设置窗口 size，长期运行会造成无意义 I/O 和 native 调用。
 - 不要把“记忆中”默认持久化；只有用户主动“记住它”的内容才能写入加密存储。
 - 不要把剪贴板历史塞成宠物小菜单里的管理界面；小菜单只做“回忆”，记住/忘记/放在最上面放“记忆力”窗口。
+- 不要把变量库实现成特殊笔记本条目；变量有独立的 key/value 私密规则和搜索规则。
+- 不要监听 `Cmd+V` 或注册全局快捷键来判断私密变量是否已粘贴；自动清理只做剪贴板内容匹配。
+- 不要让变量 value 参与搜索、菜单预览、系统确认文案、复制成功反馈或“记忆中”临时历史。
+- 不要重新提交未被 `bundle.icon` 引用的 `icon.png`、`Square*Logo.png`、`StoreLogo.png` 或 `src-tauri/icons/variants`。
+- 不要把带圆角背景的应用 icon 直接设置为 `icon_as_template(true)` 的菜单栏图标，否则 macOS 会按 alpha mask 渲染成白色方块。

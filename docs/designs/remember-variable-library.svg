@@ -1,0 +1,171 @@
+<svg width="1100" height="760" viewBox="0 0 1100 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="windowShadow" x="-30" y="-24" width="1160" height="820" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" stdDeviation="26" flood-color="#17251F" flood-opacity="0.15"/>
+    </filter>
+    <filter id="panelShadow" x="-16" y="-16" width="620" height="540" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#1B3126" flood-opacity="0.08"/>
+    </filter>
+    <linearGradient id="pageBg" x1="0" y1="0" x2="1100" y2="760" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAF7"/>
+      <stop offset="0.55" stop-color="#F1F7F2"/>
+      <stop offset="1" stop-color="#F8F4EF"/>
+    </linearGradient>
+    <linearGradient id="selectedRow" x1="0" y1="0" x2="390" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E8F6ED"/>
+      <stop offset="1" stop-color="#F6FBF8"/>
+    </linearGradient>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+      .title { font-size: 34px; font-weight: 760; fill: #18241E; letter-spacing: 0; }
+      .subtitle { font-size: 15px; font-weight: 560; fill: #607068; letter-spacing: 0; }
+      .segText { font-size: 13px; font-weight: 720; fill: #64756D; letter-spacing: 0; }
+      .segTextActive { font-size: 13px; font-weight: 760; fill: #1F6A45; letter-spacing: 0; }
+      .placeholder { font-size: 14px; font-weight: 620; fill: #87958E; letter-spacing: 0; }
+      .panelTitle { font-size: 20px; font-weight: 760; fill: #1F2E26; letter-spacing: 0; }
+      .panelMeta { font-size: 12px; font-weight: 650; fill: #7A8A82; letter-spacing: 0; }
+      .rowTitle { font-size: 15px; font-weight: 740; fill: #24362D; letter-spacing: 0; }
+      .rowMeta { font-size: 12px; font-weight: 620; fill: #75857D; letter-spacing: 0; }
+      .detailTitle { font-size: 25px; font-weight: 760; fill: #1F2E26; letter-spacing: 0; }
+      .label { font-size: 12px; font-weight: 760; fill: #7B8B83; letter-spacing: 0; }
+      .valueText { font-size: 24px; font-weight: 760; fill: #2D3E34; letter-spacing: 0; }
+      .bodyText { font-size: 15px; font-weight: 600; fill: #34463B; letter-spacing: 0; }
+      .mutedText { font-size: 13px; font-weight: 620; fill: #6F8178; letter-spacing: 0; }
+      .buttonText { font-size: 13px; font-weight: 760; fill: #226A45; letter-spacing: 0; }
+      .blueText { font-size: 13px; font-weight: 760; fill: #285A86; letter-spacing: 0; }
+      .dangerText { font-size: 13px; font-weight: 760; fill: #B83B3B; letter-spacing: 0; }
+      .chipText { font-size: 12px; font-weight: 760; fill: #345E8A; letter-spacing: 0; }
+    </style>
+  </defs>
+
+  <rect width="1100" height="760" rx="18" fill="#DDE8E0"/>
+  <g filter="url(#windowShadow)" class="ui">
+    <rect x="18" y="16" width="1064" height="728" rx="16" fill="url(#pageBg)"/>
+    <rect x="18" y="16" width="1064" height="42" rx="16" fill="#FFFFFF" fill-opacity="0.9"/>
+    <rect x="18" y="46" width="1064" height="12" fill="#FFFFFF" fill-opacity="0.9"/>
+    <circle cx="43" cy="37" r="7.5" fill="#FF5F57"/>
+    <circle cx="66" cy="37" r="7.5" fill="#FFBD2E"/>
+    <circle cx="89" cy="37" r="7.5" fill="#28C840"/>
+    <text x="116" y="42" font-size="15" font-weight="700" fill="#313D36">记忆力</text>
+
+    <g transform="translate(56 86)">
+      <rect x="0" y="4" width="32" height="32" rx="7" fill="#DDF4E7"/>
+      <rect x="8" y="14" width="16" height="12" rx="3" fill="#46B47C"/>
+      <rect x="12" y="10" width="8" height="4" fill="#46B47C"/>
+      <rect x="11" y="17" width="3" height="3" fill="#123426"/>
+      <rect x="19" y="17" width="3" height="3" fill="#123426"/>
+      <rect x="12" y="24" width="10" height="2" fill="#2A7B52"/>
+      <text x="44" y="27" class="title">记忆力</text>
+      <text x="44" y="53" class="subtitle">统一回忆 · 变量 6/50</text>
+    </g>
+
+    <g transform="translate(56 154)">
+      <rect x="0" y="0" width="350" height="44" rx="12" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <rect x="266" y="5" width="78" height="34" rx="9" fill="#E5F4EB" stroke="#BFE5CC"/>
+      <text x="28" y="28" class="segText">全部</text>
+      <text x="92" y="28" class="segText">记忆中</text>
+      <text x="174" y="28" class="segText">笔记本</text>
+      <text x="293" y="28" class="segTextActive">变量</text>
+
+      <rect x="374" y="0" width="440" height="44" rx="12" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <circle cx="398" cy="22" r="7" stroke="#7B8B83" stroke-width="2"/>
+      <line x1="403" y1="27" x2="409" y2="33" stroke="#7B8B83" stroke-width="2" stroke-linecap="round"/>
+      <text x="424" y="28" class="placeholder">搜索 key 或备注</text>
+
+      <rect x="834" y="0" width="154" height="44" rx="12" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <line x1="858" y1="22" x2="870" y2="22" stroke="#226A45" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="864" y1="16" x2="864" y2="28" stroke="#226A45" stroke-width="2.2" stroke-linecap="round"/>
+      <text x="884" y="28" class="buttonText">新增变量</text>
+    </g>
+
+    <g transform="translate(56 222)">
+      <g filter="url(#panelShadow)">
+        <rect x="0" y="0" width="430" height="462" rx="10" fill="#FFFFFF" stroke="#D9E5DC"/>
+      </g>
+      <rect x="0.5" y="0.5" width="429" height="62" rx="9.5" fill="#FBFDFB"/>
+      <text x="24" y="39" class="panelTitle">变量</text>
+      <text x="82" y="39" class="panelMeta">只显示 key</text>
+      <line x1="0" y1="62" x2="430" y2="62" stroke="#E7EEE9"/>
+
+      <g transform="translate(18 82)">
+        <rect x="0" y="0" width="394" height="72" rx="10" fill="url(#selectedRow)" stroke="#45B777" stroke-width="1.5"/>
+        <rect x="18" y="18" width="28" height="28" rx="8" fill="#EAF5FB"/>
+        <path d="M27 32V28C27 24.5 29.5 22 32 22C34.5 22 37 24.5 37 28V32" stroke="#285A86" stroke-width="1.8" stroke-linecap="round"/>
+        <rect x="25" y="31" width="14" height="11" rx="3" fill="#285A86"/>
+        <text x="62" y="30" class="rowTitle">github_token</text>
+        <text x="62" y="52" class="rowMeta">GitHub classic token，给 gh 用</text>
+        <circle cx="362" cy="36" r="4" fill="#45B777"/>
+      </g>
+
+      <g transform="translate(18 166)">
+        <rect x="0" y="0" width="394" height="64" rx="10" fill="#FFFFFF"/>
+        <text x="20" y="28" class="rowTitle">wifi_password</text>
+        <text x="20" y="49" class="rowMeta">家里路由器</text>
+      </g>
+
+      <g transform="translate(18 240)">
+        <rect x="0" y="0" width="394" height="64" rx="10" fill="#FFFFFF"/>
+        <text x="20" y="28" class="rowTitle">ssh_private_key_passphrase</text>
+        <text x="20" y="49" class="rowMeta">本机 SSH key 备注</text>
+      </g>
+
+      <g transform="translate(18 314)">
+        <rect x="0" y="0" width="394" height="64" rx="10" fill="#FFFFFF"/>
+        <text x="20" y="28" class="rowTitle">office_address</text>
+        <text x="20" y="49" class="rowMeta">寄件地址</text>
+      </g>
+
+      <g transform="translate(18 388)">
+        <rect x="0" y="0" width="394" height="54" rx="10" fill="#FFFFFF"/>
+        <text x="20" y="32" class="rowTitle">api_base_url</text>
+        <text x="316" y="32" class="rowMeta">还有 2 条</text>
+      </g>
+    </g>
+
+    <g transform="translate(512 222)" filter="url(#panelShadow)">
+      <rect x="0" y="0" width="532" height="462" rx="10" fill="#FFFFFF" stroke="#D9E5DC"/>
+    </g>
+    <g transform="translate(512 222)" class="ui">
+      <rect x="0.5" y="0.5" width="531" height="76" rx="9.5" fill="#FBFDFB"/>
+      <text x="28" y="47" class="detailTitle">github_token</text>
+      <rect x="394" y="24" width="82" height="28" rx="14" fill="#EEF5FB"/>
+      <text x="416" y="43" class="chipText">私密</text>
+      <line x1="0" y1="76" x2="532" y2="76" stroke="#E7EEE9"/>
+
+      <g transform="translate(32 108)">
+        <text x="0" y="0" class="label">VALUE</text>
+        <rect x="0" y="16" width="468" height="64" rx="10" fill="#FCFEFC" stroke="#DCE8DF"/>
+        <text x="20" y="56" class="valueText">••••••••••••••••</text>
+        <rect x="358" y="29" width="88" height="38" rx="19" fill="#F3F7FA" stroke="#D7E3EC"/>
+        <path d="M379 48C385 40 395 40 401 48C395 56 385 56 379 48Z" stroke="#285A86" stroke-width="1.6"/>
+        <circle cx="390" cy="48" r="2.5" fill="#285A86"/>
+        <text x="408" y="53" class="blueText">显示</text>
+      </g>
+
+      <g transform="translate(32 214)">
+        <text x="0" y="0" class="label">备注</text>
+        <rect x="0" y="16" width="468" height="72" rx="10" fill="#FCFEFC" stroke="#DCE8DF"/>
+        <text x="20" y="48" class="bodyText">GitHub classic token，给 gh 用。</text>
+        <text x="20" y="70" class="mutedText">备注随变量一起加密保存。</text>
+      </g>
+
+      <g transform="translate(32 326)">
+        <rect x="0" y="0" width="468" height="54" rx="12" fill="#F6FAF7" stroke="#DCE8DF"/>
+        <text x="20" y="33" class="bodyText">复制后 30 秒清理剪贴板</text>
+        <rect x="398" y="15" width="42" height="24" rx="12" fill="#45B777"/>
+        <circle cx="428" cy="27" r="9" fill="#FFFFFF"/>
+      </g>
+
+      <g transform="translate(32 404)">
+        <rect x="0" y="0" width="146" height="42" rx="21" fill="#E4F4EA" stroke="#BCE5CB"/>
+        <rect x="24" y="17" width="10" height="10" rx="2" stroke="#226A45" stroke-width="1.6"/>
+        <rect x="28" y="13" width="10" height="10" rx="2" stroke="#226A45" stroke-width="1.6"/>
+        <text x="50" y="27" class="buttonText">复制 value</text>
+        <rect x="166" y="0" width="86" height="42" rx="21" fill="#F3F7FA" stroke="#D7E3EC"/>
+        <text x="197" y="27" class="blueText">编辑</text>
+        <rect x="272" y="0" width="88" height="42" rx="21" fill="#FFF6F4" stroke="#F0C7C3"/>
+        <text x="303" y="27" class="dangerText">删除</text>
+      </g>
+    </g>
+  </g>
+</svg>

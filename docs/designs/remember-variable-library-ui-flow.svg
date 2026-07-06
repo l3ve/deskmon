@@ -1,0 +1,378 @@
+<svg width="1640" height="3180" viewBox="0 0 1640 3180" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-20" y="-16" width="760" height="640" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#173024" flood-opacity="0.14"/>
+    </filter>
+    <filter id="soft" x="-8" y="-8" width="420" height="420" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#173024" flood-opacity="0.08"/>
+    </filter>
+    <style>
+      .ui { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+      .boardTitle { font-size: 32px; font-weight: 780; fill: #19241E; letter-spacing: 0; }
+      .frameTitle { font-size: 22px; font-weight: 760; fill: #1C2C24; letter-spacing: 0; }
+      .frameNote { font-size: 14px; font-weight: 560; fill: #65746D; letter-spacing: 0; }
+      .winTitle { font-size: 13px; font-weight: 700; fill: #303E36; letter-spacing: 0; }
+      .h1 { font-size: 24px; font-weight: 760; fill: #1E2D25; letter-spacing: 0; }
+      .summary { font-size: 12px; font-weight: 600; fill: #63746C; letter-spacing: 0; }
+      .seg { font-size: 11px; font-weight: 720; fill: #697971; letter-spacing: 0; }
+      .segActive { font-size: 11px; font-weight: 760; fill: #206842; letter-spacing: 0; }
+      .placeholder { font-size: 12px; font-weight: 620; fill: #87958E; letter-spacing: 0; }
+      .button { font-size: 12px; font-weight: 760; fill: #226A45; letter-spacing: 0; }
+      .blueButton { font-size: 12px; font-weight: 760; fill: #285A86; letter-spacing: 0; }
+      .dangerButton { font-size: 12px; font-weight: 760; fill: #B83B3B; letter-spacing: 0; }
+      .section { font-size: 14px; font-weight: 760; fill: #23352B; letter-spacing: 0; }
+      .meta { font-size: 11px; font-weight: 640; fill: #7A8982; letter-spacing: 0; }
+      .row { font-size: 12px; font-weight: 720; fill: #26372E; letter-spacing: 0; }
+      .rowMeta { font-size: 10.5px; font-weight: 620; fill: #74847D; letter-spacing: 0; }
+      .detailTitle { font-size: 20px; font-weight: 760; fill: #1F2E26; letter-spacing: 0; }
+      .label { font-size: 10.5px; font-weight: 760; fill: #7A8A82; letter-spacing: 0; }
+      .fieldText { font-size: 13px; font-weight: 620; fill: #2E4035; letter-spacing: 0; }
+      .mask { font-size: 19px; font-weight: 760; fill: #33443A; letter-spacing: 0; }
+      .status { font-size: 12px; font-weight: 660; fill: #5C7066; letter-spacing: 0; }
+      .menuText { font-size: 13px; font-weight: 560; fill: #1E2D25; letter-spacing: 0; }
+      .menuMuted { font-size: 12px; font-weight: 560; fill: #8A978F; letter-spacing: 0; }
+    </style>
+  </defs>
+
+  <rect width="1640" height="3180" rx="28" fill="#DDE8E0"/>
+  <text x="48" y="56" class="boardTitle ui">记忆力变量库 UI 流程</text>
+  <text x="48" y="84" class="frameNote ui">窗口保持 920x620 的轻量感；复杂信息通过状态切换出现，不在主界面一次性铺满。</text>
+
+  <g class="ui" transform="translate(48 116)">
+    <text x="0" y="0" class="frameTitle">01 默认：统一回忆工作台</text>
+    <text x="0" y="24" class="frameNote">左侧按来源分组，右侧展示当前条目；变量 value 默认隐藏。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <rect y="28" width="720" height="10" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">记忆中 3/10 · 笔记本 4/50 · 变量 6/50</text>
+
+      <rect x="34" y="128" width="238" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <rect x="39" y="133" width="52" height="26" rx="8" fill="#E5F4EB" stroke="#BFE5CC"/>
+      <text x="56" y="151" class="segActive">全部</text>
+      <text x="109" y="151" class="seg">记忆中</text>
+      <text x="169" y="151" class="seg">笔记本</text>
+      <text x="226" y="151" class="seg">变量</text>
+      <rect x="288" y="128" width="248" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <circle cx="310" cy="146" r="6" stroke="#7C8C84" stroke-width="1.8"/>
+      <line x1="315" y1="151" x2="320" y2="156" stroke="#7C8C84" stroke-width="1.8" stroke-linecap="round"/>
+      <text x="332" y="151" class="placeholder">搜索回忆</text>
+      <rect x="552" y="128" width="134" height="36" rx="10" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="588" y="151" class="button">新增变量</text>
+
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">记忆中</text>
+      <text x="112" y="219" class="meta">临时想到的 3 条</text>
+      <text x="58" y="253" class="row">部署命令 npm run tauri...</text>
+      <text x="58" y="281" class="row">本地回调地址 http://127...</text>
+      <line x1="34" y1="306" x2="338" y2="306" stroke="#E7EEE9"/>
+      <text x="54" y="339" class="section">笔记本</text>
+      <text x="112" y="339" class="meta">牢牢记下的 4 条</text>
+      <text x="58" y="374" class="row">l3ve624@gmail.com</text>
+      <text x="58" y="402" class="row">常用收件地址</text>
+      <line x1="34" y1="430" x2="338" y2="430" stroke="#E7EEE9"/>
+      <text x="54" y="463" class="section">变量</text>
+      <text x="100" y="463" class="meta">只显示 key</text>
+      <rect x="50" y="482" width="272" height="58" rx="9" fill="#E8F6ED" stroke="#45B777" stroke-width="1.4"/>
+      <text x="70" y="507" class="row">github_token</text>
+      <text x="70" y="527" class="rowMeta">GitHub classic token，给 gh 用</text>
+
+      <rect x="358" y="184" width="328" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="224" class="detailTitle">github_token</text>
+      <rect x="584" y="202" width="66" height="24" rx="12" fill="#EEF5FB"/>
+      <text x="604" y="218" class="meta">私密</text>
+      <line x1="358" y1="246" x2="686" y2="246" stroke="#E7EEE9"/>
+      <text x="382" y="283" class="label">VALUE</text>
+      <rect x="382" y="296" width="280" height="52" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="329" class="mask">••••••••••••••</text>
+      <rect x="586" y="307" width="58" height="30" rx="15" fill="#F3F7FA" stroke="#D7E3EC"/>
+      <text x="607" y="327" class="blueButton">显示</text>
+      <text x="382" y="382" class="label">备注</text>
+      <rect x="382" y="394" width="280" height="58" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="423" class="fieldText">GitHub classic token，给 gh 用。</text>
+      <rect x="382" y="490" width="118" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="414" y="513" class="button">复制 value</text>
+      <rect x="512" y="490" width="64" height="36" rx="18" fill="#F3F7FA" stroke="#D7E3EC"/>
+      <text x="533" y="513" class="blueButton">编辑</text>
+      <rect x="588" y="490" width="64" height="36" rx="18" fill="#FFF6F4" stroke="#F0C7C3"/>
+      <text x="609" y="513" class="dangerButton">删除</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(872 116)">
+    <text x="0" y="0" class="frameTitle">02 新增变量</text>
+    <text x="0" y="24" class="frameNote">不弹模态，右侧详情区切成表单；保存后回到详情。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">变量 6/50</text>
+      <rect x="34" y="128" width="238" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <rect x="215" y="133" width="52" height="26" rx="8" fill="#E5F4EB" stroke="#BFE5CC"/>
+      <text x="56" y="151" class="seg">全部</text>
+      <text x="109" y="151" class="seg">记忆中</text>
+      <text x="169" y="151" class="seg">笔记本</text>
+      <text x="232" y="151" class="segActive">变量</text>
+      <rect x="288" y="128" width="248" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="326" y="151" class="placeholder">搜索 key 或备注</text>
+      <rect x="552" y="128" width="134" height="36" rx="10" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="588" y="151" class="button">新增变量</text>
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">变量</text>
+      <text x="100" y="219" class="meta">已有 6 条</text>
+      <text x="58" y="258" class="row">github_token</text>
+      <text x="58" y="292" class="row">wifi_password</text>
+      <text x="58" y="326" class="row">ssh_private_key_passphrase</text>
+      <text x="58" y="360" class="row">office_address</text>
+      <rect x="358" y="184" width="328" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="224" class="detailTitle">新增变量</text>
+      <line x1="358" y1="246" x2="686" y2="246" stroke="#E7EEE9"/>
+      <text x="382" y="281" class="label">KEY</text>
+      <rect x="382" y="294" width="280" height="42" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="321" class="placeholder">例如 github_token</text>
+      <text x="382" y="365" class="label">VALUE</text>
+      <rect x="382" y="378" width="280" height="42" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="405" class="placeholder">默认隐藏输入</text>
+      <text x="382" y="449" class="label">备注</text>
+      <rect x="382" y="462" width="280" height="58" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="492" class="placeholder">可选</text>
+      <rect x="382" y="538" width="88" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="414" y="561" class="button">保存</text>
+      <rect x="482" y="538" width="70" height="36" rx="18" fill="#F7FAF8" stroke="#D8E5DD"/>
+      <text x="505" y="561" class="meta">取消</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(48 872)">
+    <text x="0" y="0" class="frameTitle">03 表单校验</text>
+    <text x="0" y="24" class="frameNote">错误贴近字段出现；不使用系统弹窗打断输入。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">变量 6/50</text>
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">变量</text>
+      <text x="58" y="258" class="row">github_token</text>
+      <text x="58" y="292" class="row">wifi_password</text>
+      <rect x="358" y="118" width="328" height="458" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="158" class="detailTitle">新增变量</text>
+      <line x1="358" y1="180" x2="686" y2="180" stroke="#E7EEE9"/>
+      <text x="382" y="215" class="label">KEY</text>
+      <rect x="382" y="228" width="280" height="42" rx="9" fill="#FFF9F8" stroke="#E9B8B3"/>
+      <text x="398" y="255" class="fieldText">github_token</text>
+      <text x="398" y="288" font-size="11" font-weight="650" fill="#B83B3B">这个名字已经用过了</text>
+      <text x="382" y="326" class="label">VALUE</text>
+      <rect x="382" y="339" width="280" height="42" rx="9" fill="#FFF9F8" stroke="#E9B8B3"/>
+      <text x="398" y="366" class="placeholder">不能为空</text>
+      <text x="398" y="399" font-size="11" font-weight="650" fill="#B83B3B">value 不能为空</text>
+      <text x="382" y="438" class="label">备注</text>
+      <rect x="382" y="451" width="280" height="58" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <rect x="382" y="528" width="88" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="414" y="551" class="button">保存</text>
+      <rect x="482" y="528" width="70" height="36" rx="18" fill="#F7FAF8" stroke="#D8E5DD"/>
+      <text x="505" y="551" class="meta">取消</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(872 872)">
+    <text x="0" y="0" class="frameTitle">04 编辑并临时显示 value</text>
+    <text x="0" y="24" class="frameNote">显示 value 是局部状态；切换条目或关闭窗口后恢复隐藏。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">变量 6/50</text>
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">变量</text>
+      <rect x="50" y="236" width="272" height="58" rx="9" fill="#E8F6ED" stroke="#45B777" stroke-width="1.4"/>
+      <text x="70" y="261" class="row">github_token</text>
+      <text x="70" y="281" class="rowMeta">GitHub classic token，给 gh 用</text>
+      <rect x="358" y="118" width="328" height="458" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="158" class="detailTitle">编辑变量</text>
+      <line x1="358" y1="180" x2="686" y2="180" stroke="#E7EEE9"/>
+      <text x="382" y="215" class="label">KEY</text>
+      <rect x="382" y="228" width="280" height="42" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="255" class="fieldText">github_token</text>
+      <text x="382" y="301" class="label">VALUE</text>
+      <rect x="382" y="314" width="280" height="42" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="341" class="fieldText">ghp_1a2b3c4d5e6f...</text>
+      <rect x="604" y="320" width="46" height="28" rx="14" fill="#F3F7FA" stroke="#D7E3EC"/>
+      <text x="616" y="339" class="blueButton">隐藏</text>
+      <text x="382" y="386" class="label">备注</text>
+      <rect x="382" y="399" width="280" height="74" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="428" class="fieldText">GitHub classic token，给 gh 用。</text>
+      <rect x="382" y="502" width="96" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="407" y="525" class="button">保存修改</text>
+      <rect x="490" y="502" width="70" height="36" rx="18" fill="#F7FAF8" stroke="#D8E5DD"/>
+      <text x="513" y="525" class="meta">取消</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(48 1628)">
+    <text x="0" y="0" class="frameTitle">05 搜索</text>
+    <text x="0" y="24" class="frameNote">搜索仍按来源分组；变量只匹配 key 和备注。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">搜索 token</text>
+      <rect x="34" y="128" width="238" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <rect x="39" y="133" width="52" height="26" rx="8" fill="#E5F4EB" stroke="#BFE5CC"/>
+      <text x="56" y="151" class="segActive">全部</text>
+      <text x="109" y="151" class="seg">记忆中</text>
+      <text x="169" y="151" class="seg">笔记本</text>
+      <text x="226" y="151" class="seg">变量</text>
+      <rect x="288" y="128" width="248" height="36" rx="10" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="312" y="151" class="fieldText">token</text>
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">笔记本</text>
+      <text x="112" y="219" class="meta">1 条</text>
+      <text x="58" y="253" class="row">GitHub token 更新步骤</text>
+      <line x1="34" y1="280" x2="338" y2="280" stroke="#E7EEE9"/>
+      <text x="54" y="313" class="section">变量</text>
+      <text x="100" y="313" class="meta">2 条</text>
+      <rect x="50" y="330" width="272" height="58" rx="9" fill="#E8F6ED" stroke="#45B777" stroke-width="1.4"/>
+      <text x="70" y="355" class="row">github_token</text>
+      <text x="70" y="375" class="rowMeta">GitHub classic token，给 gh 用</text>
+      <text x="58" y="424" class="row">slack_bot_token</text>
+      <text x="58" y="444" class="rowMeta">机器人 webhook</text>
+      <rect x="358" y="184" width="328" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="224" class="detailTitle">github_token</text>
+      <text x="382" y="283" class="label">VALUE</text>
+      <rect x="382" y="296" width="280" height="52" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="329" class="mask">••••••••••••••</text>
+      <text x="382" y="382" class="label">备注</text>
+      <rect x="382" y="394" width="280" height="58" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="423" class="fieldText">GitHub classic token，给 gh 用。</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(872 1628)">
+    <text x="0" y="0" class="frameTitle">06 复制后的反馈</text>
+    <text x="0" y="24" class="frameNote">反馈只说 key；自动清理是状态条，不弹窗。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <text x="34" y="82" class="h1">记忆力</text>
+      <text x="34" y="104" class="summary">变量 6/50</text>
+      <rect x="34" y="184" width="304" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="54" y="219" class="section">变量</text>
+      <rect x="50" y="236" width="272" height="58" rx="9" fill="#E8F6ED" stroke="#45B777" stroke-width="1.4"/>
+      <text x="70" y="261" class="row">github_token</text>
+      <text x="70" y="281" class="rowMeta">GitHub classic token，给 gh 用</text>
+      <rect x="358" y="184" width="328" height="392" rx="9" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="382" y="224" class="detailTitle">github_token</text>
+      <text x="382" y="283" class="label">VALUE</text>
+      <rect x="382" y="296" width="280" height="52" rx="9" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="398" y="329" class="mask">••••••••••••••</text>
+      <rect x="382" y="382" width="280" height="48" rx="9" fill="#F5FAF7" stroke="#DCE8DF"/>
+      <circle cx="402" cy="406" r="6" fill="#45B777"/>
+      <text x="418" y="411" class="status">已复制 github_token</text>
+      <rect x="382" y="444" width="280" height="48" rx="9" fill="#F8FBF9" stroke="#DCE8DF"/>
+      <text x="402" y="473" class="status">若剪贴板仍匹配，27 秒后清理</text>
+      <rect x="382" y="520" width="118" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="414" y="543" class="button">再次复制</text>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(48 2384)">
+    <text x="0" y="0" class="frameTitle">07 删除确认</text>
+    <text x="0" y="24" class="frameNote">使用系统确认；只出现 key，不出现 value。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#F7FAF6"/>
+      <rect width="720" height="38" rx="16" fill="#FFFFFF" fill-opacity="0.94"/>
+      <circle cx="24" cy="20" r="6" fill="#FF5F57"/>
+      <circle cx="44" cy="20" r="6" fill="#FFBD2E"/>
+      <circle cx="64" cy="20" r="6" fill="#28C840"/>
+      <text x="86" y="25" class="winTitle">记忆力</text>
+      <rect x="34" y="92" width="652" height="484" rx="12" fill="#FFFFFF" stroke="#D8E5DD"/>
+      <text x="62" y="140" class="detailTitle">github_token</text>
+      <rect x="62" y="178" width="580" height="80" rx="10" fill="#FCFEFC" stroke="#DCE8DF"/>
+      <text x="82" y="226" class="mask">••••••••••••••</text>
+      <rect x="62" y="290" width="118" height="36" rx="18" fill="#E4F4EA" stroke="#BCE5CB"/>
+      <text x="94" y="313" class="button">复制 value</text>
+      <rect x="194" y="290" width="64" height="36" rx="18" fill="#F3F7FA" stroke="#D7E3EC"/>
+      <text x="215" y="313" class="blueButton">编辑</text>
+      <rect x="272" y="290" width="64" height="36" rx="18" fill="#FFF6F4" stroke="#F0C7C3"/>
+      <text x="293" y="313" class="dangerButton">删除</text>
+      <rect width="720" height="620" rx="16" fill="#0B1510" fill-opacity="0.18"/>
+      <g filter="url(#soft)" transform="translate(190 220)">
+        <rect width="340" height="174" rx="16" fill="#FFFFFF" stroke="#DFE5E0"/>
+        <text x="28" y="42" class="detailTitle">删除变量？</text>
+        <text x="28" y="78" class="fieldText">要让 Deskmon 忘记 github_token 吗？</text>
+        <text x="28" y="104" class="meta">这个操作无法恢复。</text>
+        <rect x="164" y="124" width="66" height="34" rx="17" fill="#F7FAF8" stroke="#D8E5DD"/>
+        <text x="186" y="146" class="meta">取消</text>
+        <rect x="244" y="124" width="68" height="34" rx="17" fill="#FFF3F1" stroke="#F0C7C3"/>
+        <text x="265" y="146" class="dangerButton">删除</text>
+      </g>
+    </g>
+  </g>
+
+  <g class="ui" transform="translate(872 2384)">
+    <text x="0" y="0" class="frameTitle">08 宠物小菜单回忆</text>
+    <text x="0" y="24" class="frameNote">原生轻入口只做取出；变量分组只显示 key。</text>
+    <g filter="url(#shadow)" transform="translate(0 48)">
+      <rect width="720" height="620" rx="16" fill="#EEF6F0"/>
+      <rect x="300" y="152" width="104" height="104" rx="52" fill="#BDECD3"/>
+      <rect x="324" y="188" width="56" height="44" rx="18" fill="#4FBD83"/>
+      <rect x="342" y="174" width="20" height="16" fill="#4FBD83"/>
+      <rect x="340" y="204" width="7" height="7" fill="#14392A"/>
+      <rect x="358" y="204" width="7" height="7" fill="#14392A"/>
+      <rect x="342" y="224" width="24" height="5" rx="2" fill="#2E8056"/>
+      <g transform="translate(180 282)">
+        <rect width="210" height="206" rx="10" fill="#FFFFFF" stroke="#D8D8D8"/>
+        <text x="18" y="34" class="menuText">开始 25 分钟</text>
+        <line x1="0" y1="52" x2="210" y2="52" stroke="#ECECEC"/>
+        <text x="18" y="84" class="menuText">回忆</text>
+        <path d="M188 78L196 86L188 94" stroke="#818A84" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="18" y="116" class="menuText">暂停移动</text>
+        <text x="18" y="148" class="menuText">设置</text>
+        <line x1="0" y1="166" x2="210" y2="166" stroke="#ECECEC"/>
+        <text x="18" y="194" class="menuText">退出 Deskmon</text>
+      </g>
+      <g transform="translate(402 334)">
+        <rect width="190" height="142" rx="10" fill="#FFFFFF" stroke="#D8D8D8"/>
+        <text x="16" y="32" class="menuText">记忆中</text>
+        <path d="M166 26L174 34L166 42" stroke="#818A84" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="16" y="68" class="menuText">笔记本</text>
+        <path d="M166 62L174 70L166 78" stroke="#818A84" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="16" y="104" class="menuText">变量</text>
+        <path d="M166 98L174 106L166 114" stroke="#818A84" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+      <g transform="translate(606 408)">
+        <rect width="176" height="132" rx="10" fill="#FFFFFF" stroke="#D8D8D8"/>
+        <text x="16" y="32" class="menuText">github_token</text>
+        <text x="16" y="66" class="menuText">wifi_password</text>
+        <text x="16" y="100" class="menuText">office_address</text>
+        <text x="128" y="100" class="menuMuted">...</text>
+      </g>
+    </g>
+  </g>
+</svg>
