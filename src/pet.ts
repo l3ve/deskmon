@@ -5,6 +5,7 @@ import type {
   ActivityLevel,
   BootstrapPayload,
   Dimensions,
+  MonitorPayload,
   Point,
   Rect,
   Settings,
@@ -74,6 +75,32 @@ interface FrameBounds {
   maxY: number;
 }
 
+interface GiantCelebrationState {
+  startedAt: number;
+  normalCenter: Point;
+  normalPetDimensions: Dimensions;
+  normalWindowDimensions: Dimensions;
+  targetCenter: Point;
+  targetPetDimensions: Dimensions;
+  targetWindowDimensions: Dimensions;
+  restorePetDimensions: Dimensions;
+  restoreWindowDimensions: Dimensions;
+  lastPresentationSync: number;
+}
+
+interface GiantPresentationFrame {
+  center: Point;
+  petDimensions: Dimensions;
+  windowDimensions: Dimensions;
+  alwaysOnTop: boolean;
+}
+
+interface TemporaryPetPresentation {
+  position: Point;
+  dimensions: Dimensions;
+  alwaysOnTop: boolean;
+}
+
 const activityProfiles: Record<ActivityLevel, ActivityProfile> = {
   quiet: { speed: 55, runChance: 0.08, restMs: [5000, 9000] },
   standard: { speed: 86, runChance: 0.2, restMs: [2800, 5600] },
@@ -90,6 +117,14 @@ const spriteCanvasSize = 32;
 const spriteFramePadding = 2;
 const spriteMaxDrawWidth = spriteCanvasSize - spriteFramePadding * 2;
 const spriteMaxDrawHeight = spriteCanvasSize - spriteFramePadding * 2;
+const giantCelebrationEnterMs = 3000;
+const giantCelebrationHoldMs = 3000;
+const giantCelebrationRestoreMs = 1000;
+const giantCelebrationTotalMs =
+  giantCelebrationEnterMs + giantCelebrationHoldMs + giantCelebrationRestoreMs;
+const giantCelebrationMinPhysicalSize = 320;
+const giantCelebrationMaxPhysicalSize = 560;
+const giantPresentationSyncIntervalMs = 33;
 const defaultSlimeSkin: PetSkin = {
   id: "pixel-slime-default",
   draw: drawSlime,
@@ -161,9 +196,12 @@ class PetController {
   private lastHoverFrameCheck = 0;
   private lastWindowSync = 0;
   private facing: PetFacing = "right";
+  private giantCelebration: GiantCelebrationState | null = null;
   private mood: PetMood = "idle";
+  private monitors: MonitorPayload[] = [];
   private moveInFlight = false;
   private pendingMoveTarget: Point | null = null;
+  private pendingTemporaryPresentation: TemporaryPetPresentation | null = null;
   private persistAfterMove = false;
   private petDimensions: Dimensions = { width: 104, height: 104 };
   private petWindowDimensions: Dimensions = { width: 104, height: 104 };
@@ -174,6 +212,7 @@ class PetController {
   private settings: Settings | null = null;
   private skin: PetSkin = spriteSlimeSkin;
   private target: Point | null = null;
+  private temporaryPresentationInFlight = false;
   private timer: TimerSnapshot = {
     isRunning: false,
     durationSeconds: 0,
@@ -195,6 +234,9 @@ class PetController {
     this.canvas.addEventListener("pointercancel", () => this.finishDrag());
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      if (this.giantCelebration) {
+        return;
+      }
       void invoke("show_pet_menu");
     });
   }
@@ -218,6 +260,10 @@ class PetController {
     });
     void listen<TimerSnapshot>("deskmon-timer-changed", (event) => {
       this.timer = event.payload;
+      if (event.payload.isRunning && this.giantCelebration) {
+        this.finishGiantCelebration();
+        this.mood = "timer-waiting";
+      }
     });
     void listen("deskmon-timer-finished", () => {
       this.timer = {
@@ -226,23 +272,39 @@ class PetController {
         remainingSeconds: 0,
         endsAtMs: null,
       };
-      this.celebrateUntil = performance.now() + 5200;
+      this.handleTimerFinished(performance.now());
+    });
+    void listen<boolean>("deskmon-visibility-changed", (event) => {
+      if (this.settings) {
+        this.settings.petVisible = event.payload;
+      }
+      if (!event.payload && this.giantCelebration) {
+        this.finishGiantCelebration();
+      }
     });
     void listen("deskmon-settings-changed", async () => {
       const bootstrap = await invoke<BootstrapPayload>("get_desktop_snapshot");
       this.applyBootstrap(bootstrap);
-      this.resizeCanvas();
-      this.pickTarget();
+      if (!this.giantCelebration) {
+        this.resizeCanvas();
+        this.pickTarget();
+      }
     });
   }
 
   private applyBootstrap(bootstrap: BootstrapPayload): void {
     this.settings = bootstrap.settings;
+    this.monitors = bootstrap.monitors;
     this.activityArea = bootstrap.activityArea;
+    this.timer = bootstrap.timer;
+    if (this.giantCelebration) {
+      this.giantCelebration.restorePetDimensions = bootstrap.petDimensions;
+      this.giantCelebration.restoreWindowDimensions = bootstrap.petWindowDimensions;
+      return;
+    }
     this.petDimensions = bootstrap.petDimensions;
     this.petWindowDimensions = bootstrap.petWindowDimensions;
     this.position = bootstrap.petPosition;
-    this.timer = bootstrap.timer;
   }
 
   private resizeCanvas(): void {
@@ -268,6 +330,11 @@ class PetController {
   private updateMovement(time: number, dtSeconds: number): void {
     const settings = this.settings;
     if (!settings) {
+      return;
+    }
+
+    if (this.giantCelebration) {
+      this.updateGiantCelebration(time);
       return;
     }
 
@@ -436,11 +503,260 @@ class PetController {
       });
   }
 
+  private handleTimerFinished(time: number): void {
+    if (this.settings?.petVisible === false || this.drag?.active) {
+      this.celebrateUntil = 0;
+      return;
+    }
+
+    const celebration = this.createGiantCelebration(time);
+    if (!celebration) {
+      this.celebrateUntil = time + 5200;
+      return;
+    }
+
+    this.celebrateUntil = 0;
+    this.giantCelebration = celebration;
+    this.pointerOverPet = false;
+    this.target = null;
+    this.mood = "celebrate";
+    this.updateGiantCelebration(time, true);
+  }
+
+  private createGiantCelebration(startedAt: number): GiantCelebrationState | null {
+    const normalPetDimensions = { ...this.petDimensions };
+    const normalWindowDimensions = { ...this.petWindowDimensions };
+    const normalCenter = centerOf(this.position, normalWindowDimensions);
+    const monitor = monitorForPoint(normalCenter, this.monitors) ?? this.monitors[0];
+    const workArea = monitor?.workArea ?? this.activityArea;
+    const scaleFactor = monitor?.scaleFactor ?? this.coordinateScale();
+    const physicalLimit = Math.max(1, Math.min(workArea.width, workArea.height));
+    const targetSide = Math.min(
+      physicalLimit,
+      clamp(
+        physicalLimit * 0.45,
+        Math.min(giantCelebrationMinPhysicalSize, physicalLimit),
+        Math.min(giantCelebrationMaxPhysicalSize, physicalLimit),
+      ),
+    );
+    if (targetSide <= 0 || scaleFactor <= 0) {
+      return null;
+    }
+
+    const targetWindowDimensions = { width: targetSide, height: targetSide };
+    const targetPetDimensions = {
+      width: targetSide / scaleFactor,
+      height: targetSide / scaleFactor,
+    };
+    const sizeProgress = clamp(
+      (targetSide - giantCelebrationMinPhysicalSize) /
+        (giantCelebrationMaxPhysicalSize - giantCelebrationMinPhysicalSize),
+      0,
+      1,
+    );
+    const targetCenter = centerOf(
+      clampPointToRect(
+        {
+          x: workArea.x + workArea.width * 0.5 - targetWindowDimensions.width * 0.5,
+          y:
+            workArea.y +
+            workArea.height * lerp(0.58, 0.52, sizeProgress) -
+            targetWindowDimensions.height * 0.5,
+        },
+        workArea,
+        targetWindowDimensions,
+      ),
+      targetWindowDimensions,
+    );
+
+    return {
+      startedAt,
+      normalCenter,
+      normalPetDimensions,
+      normalWindowDimensions,
+      targetCenter,
+      targetPetDimensions,
+      targetWindowDimensions,
+      restorePetDimensions: normalPetDimensions,
+      restoreWindowDimensions: normalWindowDimensions,
+      lastPresentationSync: 0,
+    };
+  }
+
+  private updateGiantCelebration(time: number, forceSync = false): void {
+    const celebration = this.giantCelebration;
+    if (!celebration) {
+      return;
+    }
+
+    const elapsed = time - celebration.startedAt;
+    if (elapsed >= giantCelebrationTotalMs) {
+      this.finishGiantCelebration();
+      return;
+    }
+
+    const frame = this.getGiantPresentationFrame(celebration, elapsed);
+    this.applyGiantPresentationFrame(frame, time, forceSync);
+    this.mood = "celebrate";
+  }
+
+  private getGiantPresentationFrame(
+    celebration: GiantCelebrationState,
+    elapsed: number,
+  ): GiantPresentationFrame {
+    if (elapsed < giantCelebrationEnterMs) {
+      const progress = easeOutCubic(elapsed / giantCelebrationEnterMs);
+      return {
+        center: lerpPoint(celebration.normalCenter, celebration.targetCenter, progress),
+        petDimensions: lerpDimensions(
+          celebration.normalPetDimensions,
+          celebration.targetPetDimensions,
+          progress,
+        ),
+        windowDimensions: lerpDimensions(
+          celebration.normalWindowDimensions,
+          celebration.targetWindowDimensions,
+          progress,
+        ),
+        alwaysOnTop: true,
+      };
+    }
+
+    if (elapsed < giantCelebrationEnterMs + giantCelebrationHoldMs) {
+      return {
+        center: celebration.targetCenter,
+        petDimensions: celebration.targetPetDimensions,
+        windowDimensions: celebration.targetWindowDimensions,
+        alwaysOnTop: true,
+      };
+    }
+
+    const restoreTarget = this.getGiantRestoreTarget(celebration);
+    const progress = easeInOutCubic(
+      (elapsed - giantCelebrationEnterMs - giantCelebrationHoldMs) /
+        giantCelebrationRestoreMs,
+    );
+    return {
+      center: lerpPoint(celebration.targetCenter, restoreTarget.center, progress),
+      petDimensions: lerpDimensions(
+        celebration.targetPetDimensions,
+        restoreTarget.petDimensions,
+        progress,
+      ),
+      windowDimensions: lerpDimensions(
+        celebration.targetWindowDimensions,
+        restoreTarget.windowDimensions,
+        progress,
+      ),
+      alwaysOnTop: true,
+    };
+  }
+
+  private getGiantRestoreTarget(celebration: GiantCelebrationState): GiantPresentationFrame {
+    const workArea =
+      monitorForPoint(celebration.normalCenter, this.monitors)?.workArea ?? this.activityArea;
+    const position = clampPointToRect(
+      topLeftFromCenter(celebration.normalCenter, celebration.restoreWindowDimensions),
+      workArea,
+      celebration.restoreWindowDimensions,
+    );
+    return {
+      center: centerOf(position, celebration.restoreWindowDimensions),
+      petDimensions: celebration.restorePetDimensions,
+      windowDimensions: celebration.restoreWindowDimensions,
+      alwaysOnTop: this.settings?.alwaysOnTop ?? true,
+    };
+  }
+
+  private applyGiantPresentationFrame(
+    frame: GiantPresentationFrame,
+    time: number,
+    forceSync = false,
+  ): void {
+    const position = topLeftFromCenter(frame.center, frame.windowDimensions);
+    this.petDimensions = frame.petDimensions;
+    this.petWindowDimensions = frame.windowDimensions;
+    this.position = position;
+    this.resizeCanvas();
+
+    const celebration = this.giantCelebration;
+    if (
+      !celebration ||
+      (!forceSync &&
+        time - celebration.lastPresentationSync < giantPresentationSyncIntervalMs)
+    ) {
+      return;
+    }
+    celebration.lastPresentationSync = time;
+    this.requestTemporaryPetPresentation({
+      position,
+      dimensions: frame.petDimensions,
+      alwaysOnTop: frame.alwaysOnTop,
+    });
+  }
+
+  private finishGiantCelebration(): void {
+    const celebration = this.giantCelebration;
+    if (!celebration) {
+      return;
+    }
+
+    const restoreTarget = this.getGiantRestoreTarget(celebration);
+    const position = topLeftFromCenter(restoreTarget.center, restoreTarget.windowDimensions);
+    this.giantCelebration = null;
+    this.petDimensions = restoreTarget.petDimensions;
+    this.petWindowDimensions = restoreTarget.windowDimensions;
+    this.position = position;
+    this.mood = this.timer.isRunning ? "timer-waiting" : "idle";
+    this.restUntil = performance.now() + 1800;
+    this.resizeCanvas();
+    this.requestTemporaryPetPresentation({
+      position,
+      dimensions: restoreTarget.petDimensions,
+      alwaysOnTop: restoreTarget.alwaysOnTop,
+    });
+    this.pickTarget();
+  }
+
+  private requestTemporaryPetPresentation(presentation: TemporaryPetPresentation): void {
+    this.pendingTemporaryPresentation = presentation;
+    this.flushTemporaryPetPresentation();
+  }
+
+  private flushTemporaryPetPresentation(): void {
+    if (this.temporaryPresentationInFlight || !this.pendingTemporaryPresentation) {
+      return;
+    }
+
+    const presentation = this.pendingTemporaryPresentation;
+    this.pendingTemporaryPresentation = null;
+    this.temporaryPresentationInFlight = true;
+    invoke("set_pet_temporary_presentation", {
+      x: presentation.position.x,
+      y: presentation.position.y,
+      width: presentation.dimensions.width,
+      height: presentation.dimensions.height,
+      alwaysOnTop: presentation.alwaysOnTop,
+    })
+      .catch(() => {
+        // A transient native presentation failure should not break the pet loop.
+      })
+      .finally(() => {
+        this.temporaryPresentationInFlight = false;
+        if (this.pendingTemporaryPresentation) {
+          this.flushTemporaryPetPresentation();
+        }
+      });
+  }
+
   private async onPointerDown(event: PointerEvent): Promise<void> {
     if (event.button !== 0) {
       return;
     }
     event.preventDefault();
+    if (this.giantCelebration) {
+      return;
+    }
     this.canvas.setPointerCapture(event.pointerId);
     const dpr = window.devicePixelRatio || 1;
     let frame: WindowFramePayload | null = null;
@@ -469,6 +785,9 @@ class PetController {
   }
 
   private onPointerMove(event: PointerEvent): void {
+    if (this.giantCelebration) {
+      return;
+    }
     if (!this.drag || this.drag.pointerId !== event.pointerId) {
       return;
     }
@@ -495,6 +814,10 @@ class PetController {
   }
 
   private onPointerUp(event: PointerEvent): void {
+    if (this.giantCelebration) {
+      this.finishDrag();
+      return;
+    }
     if (!this.drag || this.drag.pointerId !== event.pointerId) {
       return;
     }
@@ -1008,6 +1331,32 @@ function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
+function centerOf(position: Point, dimensions: Dimensions): Point {
+  return {
+    x: position.x + dimensions.width * 0.5,
+    y: position.y + dimensions.height * 0.5,
+  };
+}
+
+function topLeftFromCenter(center: Point, dimensions: Dimensions): Point {
+  return {
+    x: center.x - dimensions.width * 0.5,
+    y: center.y - dimensions.height * 0.5,
+  };
+}
+
+function monitorForPoint(point: Point, monitors: MonitorPayload[]): MonitorPayload | null {
+  return (
+    monitors.find(
+      (monitor) =>
+        point.x >= monitor.workArea.x &&
+        point.x <= monitor.workArea.x + monitor.workArea.width &&
+        point.y >= monitor.workArea.y &&
+        point.y <= monitor.workArea.y + monitor.workArea.height,
+    ) ?? null
+  );
+}
+
 function cursorInsideFrame(frame: WindowFramePayload): boolean {
   return (
     frame.cursor.x >= frame.position.x &&
@@ -1036,6 +1385,34 @@ function moveTowards(current: Point, target: Point, maxDistance: number): Point 
     x: current.x + (dx / length) * maxDistance,
     y: current.y + (dy / length) * maxDistance,
   };
+}
+
+function lerp(start: number, end: number, progress: number): number {
+  return start + (end - start) * progress;
+}
+
+function lerpPoint(start: Point, end: Point, progress: number): Point {
+  return {
+    x: lerp(start.x, end.x, progress),
+    y: lerp(start.y, end.y, progress),
+  };
+}
+
+function lerpDimensions(start: Dimensions, end: Dimensions, progress: number): Dimensions {
+  return {
+    width: lerp(start.width, end.width, progress),
+    height: lerp(start.height, end.height, progress),
+  };
+}
+
+function easeOutCubic(progress: number): number {
+  const t = clamp(progress, 0, 1);
+  return 1 - (1 - t) ** 3;
+}
+
+function easeInOutCubic(progress: number): number {
+  const t = clamp(progress, 0, 1);
+  return t < 0.5 ? 4 * t ** 3 : 1 - ((-2 * t + 2) ** 3) / 2;
 }
 
 function pointInsideRect(point: Point, rect: Rect, dimensions: Dimensions): boolean {
