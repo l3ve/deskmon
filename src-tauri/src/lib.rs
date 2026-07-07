@@ -320,6 +320,32 @@ fn move_pet_window(
 }
 
 #[tauri::command]
+fn set_pet_temporary_presentation(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    always_on_top: bool,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(PET_WINDOW) {
+        window
+            .set_size(Size::Logical(LogicalSize::new(width, height)))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_position(Position::Physical(PhysicalPosition::new(
+                x.round() as i32,
+                y.round() as i32,
+            )))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_always_on_top(always_on_top)
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn persist_pet_position(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let settings = state
         .settings
@@ -887,6 +913,7 @@ fn set_pet_visible_inner(
     state: &tauri::State<'_, AppState>,
     visible: bool,
 ) -> Result<(), String> {
+    restore_pet_window_from_settings(app, state)?;
     if let Some(window) = app.get_webview_window(PET_WINDOW) {
         if visible {
             window.show().map_err(|err| err.to_string())?;
@@ -905,6 +932,42 @@ fn set_pet_visible_inner(
     update_tray_menu(app)?;
     app.emit("deskmon-visibility-changed", visible)
         .map_err(|err| err.to_string())
+}
+
+fn restore_pet_window_from_settings(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let monitors = collect_monitors(app)?;
+    let (pet_dimensions, last_position, custom_activity_area, always_on_top) = {
+        let settings = state
+            .settings
+            .lock()
+            .map_err(|_| "settings lock poisoned")?;
+        (
+            settings.pet_size.logical_dimensions(),
+            settings.last_position,
+            settings.custom_activity_area,
+            settings.always_on_top,
+        )
+    };
+    let pet_window_dimensions = pet_physical_dimensions(pet_dimensions, &monitors, last_position);
+    let default_area = default_activity_area(&monitors);
+    let activity_area = custom_activity_area
+        .and_then(|area| normalize_activity_area(area, default_area, pet_window_dimensions))
+        .unwrap_or(default_area);
+    let position = last_position
+        .filter(|point| point_visible(*point, pet_window_dimensions, &monitors))
+        .unwrap_or_else(|| initial_pet_position(activity_area, pet_window_dimensions));
+    let position = clamp_to_visible_work_area(position, pet_window_dimensions, &monitors);
+
+    resize_and_place_pet_window(app, position, pet_dimensions)?;
+    if let Some(window) = app.get_webview_window(PET_WINDOW) {
+        window
+            .set_always_on_top(always_on_top)
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 fn relocate_pet_to_activity_area(
@@ -1890,6 +1953,7 @@ pub fn run() {
             get_desktop_snapshot,
             get_pet_window_frame,
             move_pet_window,
+            set_pet_temporary_presentation,
             persist_pet_position,
             save_user_preferences,
             show_pet_menu,

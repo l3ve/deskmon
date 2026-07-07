@@ -11,6 +11,7 @@
 - `docs/prds/001-tauri-mac-desktop-pet.md`: V1 产品边界和交互规格。
 - `docs/prds/002-remember-clipboard-history.md`: “记忆力”剪贴板历史功能边界和实现决策。
 - `docs/prds/003-remember-variable-library.md`: “记忆力”变量库的 key/value 私密取出、搜索和自动清理边界。
+- `docs/prds/004-timer-finished-giant-celebration.md`: 倒计时结束时巨型庆祝提醒/巨型庆祝动效的触发、分段、尺寸、恢复和测试边界。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -72,6 +73,15 @@
 - `celebrate.png` 仍按 6x1 切帧，但当前素材宽 2520px，每帧 420px，用空白边距容纳彩纸和主体跨格部分。
 - 宠物移动坐标按 native 物理像素处理；`petDimensions` 用于逻辑窗口/canvas 尺寸，`petWindowDimensions` 用于活动区域边界和拖拽/移动 clamp。
 - `move_pet_window` 只负责移动窗口和更新内存中的 `last_position`；磁盘持久化要低频 debounce 或通过 `persist_pet_position` 在拖拽结束/进入休息点显式触发。
+- 巨型庆祝动效使用 `set_pet_temporary_presentation` 临时调整宠物窗口；这个命令只改窗口 size/position/always_on_top，不更新 `last_position`、不写 settings。
+- 倒计时结束的巨型庆祝只在宠物可见且未被拖拽时触发；隐藏或拖拽中都只保留 macOS 通知。
+- 巨型庆祝固定 7 秒，不抢焦点，不显示桌面文字，不新增设置项；这 7 秒称为“巨型庆祝动效”。
+- 巨型庆祝动效分三段：0-3s 进入段同时放大并移动，3-6s 停留段原地庆祝，6-7s 恢复段缩回并回到原位置。
+- 巨型庆祝动效全程播放 `celebrate`；进入段按中心点直线插值并用 ease-out，恢复段按中心点直线插值并用 ease-in-out。
+- 巨型庆祝尺寸按宠物当前屏幕可用工作区自适应，目标约为限制维度的 45%，意图上下限约 320px 到 560px，最终必须留在可用工作区内。
+- 巨型庆祝期间禁止拖拽和右键宠物菜单；如果新计时器启动，立即结束庆祝并回到计时等待状态。
+- 巨型庆祝期间如果用户隐藏宠物，立即中断动效，先恢复普通尺寸/位置再隐藏。
+- 巨型庆祝期间如果设置变化，恢复时尊重新尺寸/置顶；如果屏幕环境变化，动效不中途重算，恢复时按当前可见工作区 clamp。
 - 设置页连续保存要基于本地 draft preferences 合并，避免快速切换多个控件时后一个请求用旧 bootstrap 覆盖前一个字段。
 - 设置页 UX 使用左侧摘要栏 + 右侧行为/活动区域面板；`settings-workspace/sidebar/panel` 结构需要对应样式，不要只改 TS 结构。
 - MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。
@@ -89,6 +99,12 @@
 - 清理 sprite sheet 边缘组件前，要先确认它不是相邻帧溢出的真实轮廓。
 - 不要为了 `celebrate` 彩纸跨格问题改运行时切帧逻辑，优先用更宽的单帧素材留白解决。
 - 不要在每次自主移动 tick 里写 `settings.json` 或重复设置窗口 size，长期运行会造成无意义 I/O 和 native 调用。
+- 不要把倒计时完成强提醒做成常驻全屏 overlay、抢焦点弹窗、音效或可配置提醒系统；本轮只做短暂巨型庆祝。
+- 不要在宠物隐藏或用户拖拽时触发巨型庆祝，也不要松手后补触发。
+- 不要把巨型庆祝的临时尺寸、位置或置顶状态写进用户偏好。
+- 不要用 `move_pet_window` 驱动巨型庆祝动效逐帧移动，否则会污染普通宠物位置和触发无意义 settings 写入。
+- 不要用左上角插值做巨型庆祝动效；尺寸变化时应按中心点插值，避免视觉中心漂移。
+- 不要把巨型庆祝做成瞬间变大/瞬间恢复，也不要做弧线、弹跳或物理模拟。
 - 不要把“记忆中”默认持久化；只有用户主动“记住它”的内容才能写入加密存储。
 - 不要把剪贴板历史塞成宠物小菜单里的管理界面；小菜单只做“回忆”，记住/忘记/放在最上面放“记忆力”窗口。
 - 不要把变量库实现成特殊笔记本条目；变量有独立的 key/value 私密规则和搜索规则。
