@@ -2,9 +2,14 @@
 
 ## Key Files
 
-- `src/pet.ts`: 桌宠渲染、拖拽、悬停暂停和右键触发原生小菜单。
+- `src/pet.ts`: 桌宠控制器，负责拖拽、移动循环、悬停暂停、计时器事件和右键触发原生小菜单。
+- `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
+- `src/pet/giantCelebration.ts`: 倒计时结束巨型庆祝动效的状态、分段时间和尺寸/位置插值。
+- `src/pet/slime.ts`: 默认史莱姆 sprite sheet 加载、逐帧裁剪、锚点归一化和代码绘制兜底。
 - `src/assets/slime/*.png`: 默认史莱姆 7 个状态的 sprite sheet 素材。
-- `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态和配置持久化。
+- `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态、Tauri command 和应用编排。
+- `src-tauri/src/geometry.rs`: 后端屏幕、活动区域、宠物物理尺寸和可见工作区 clamp 逻辑。
+- `src-tauri/src/settings.rs`: 用户偏好类型、默认值、逻辑尺寸映射和 settings.json 读写。
 - `src-tauri/assets/tray-icon.png`: macOS 菜单栏专用 template 图标，编译进 Rust，不放进 `src-tauri/icons`。
 - `src-tauri/src/remember.rs`: “记忆力”状态、文本规范化、笔记本加密/解密和核心规则测试。
 - `src/remember.ts`: “记忆力”窗口前端，负责记忆中/笔记本列表、详情和管理操作。
@@ -62,6 +67,8 @@
 - “记忆力”搜索覆盖“记忆中”“笔记本”“变量库”，但变量只搜索 key 和 note，不搜索 value。
 - 删除变量需要系统原生确认，确认文案只显示 key，并沿用确认后恢复“记忆力”窗口焦点的规则。
 - 默认皮肤优先使用 7 个状态 sprite sheet，代码绘制史莱姆保留为加载兜底。
+- 桌宠前端保持模块边界：`pet.ts` 只做控制器流程，sprite 细节放 `src/pet/slime.ts`，巨型庆祝算法放 `src/pet/giantCelebration.ts`，通用坐标算法放 `src/pet/geometry.ts`。
+- Tauri 后端保持模块边界：`lib.rs` 只做 command、窗口/菜单和应用编排；屏幕/活动区域算法放 `geometry.rs`，settings 类型和持久化放 `settings.rs`。
 - `src-tauri/icons` 只保留 `tauri.conf.json` 的 `bundle.icon` 声明项：`32x32.png`、`128x128.png`、`128x128@2x.png`、`icon.icns`、`icon.ico`。
 - `idle/sleep/timer-waiting/celebrate/dragged` 当前按 6x1 切帧，`walk/run` 按 6x2 切帧。
 - `walk/run` 的 6x2 帧表按方向分行播放：walk 第 0 行向左、第 1 行向右；run 第 0 行向右、第 1 行向左，不能把两行当连续 12 帧循环。

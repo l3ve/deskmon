@@ -1,9 +1,15 @@
+mod geometry;
 mod remember;
+mod settings;
 
+use geometry::{
+    clamp_to_visible_work_area, collect_monitors, default_activity_area, initial_pet_position,
+    normalize_activity_area, pet_physical_dimensions, point_visible, Dimensions, MonitorPayload,
+    Point, Rect,
+};
 use serde::{Deserialize, Serialize};
+use settings::{load_settings, save_settings, Settings, UserPreferences};
 use std::{
-    fs,
-    path::PathBuf,
     sync::Mutex,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -29,104 +35,9 @@ const TRAY_ID: &str = "deskmon-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../assets/tray-icon.png");
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
-const SETTINGS_FILE: &str = "settings.json";
-const MIN_MARGIN: f64 = 24.0;
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
 const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Rect {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Point {
-    x: f64,
-    y: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Dimensions {
-    width: f64,
-    height: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum PetSize {
-    Small,
-    Medium,
-    Large,
-}
-
-impl PetSize {
-    fn logical_dimensions(self) -> Dimensions {
-        match self {
-            PetSize::Small => Dimensions {
-                width: 76.0,
-                height: 76.0,
-            },
-            PetSize::Medium => Dimensions {
-                width: 104.0,
-                height: 104.0,
-            },
-            PetSize::Large => Dimensions {
-                width: 136.0,
-                height: 136.0,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum ActivityLevel {
-    Quiet,
-    Standard,
-    Lively,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Settings {
-    pet_size: PetSize,
-    activity_level: ActivityLevel,
-    always_on_top: bool,
-    pet_visible: bool,
-    movement_paused: bool,
-    custom_activity_area: Option<Rect>,
-    last_position: Option<Point>,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            pet_size: PetSize::Medium,
-            activity_level: ActivityLevel::Standard,
-            always_on_top: true,
-            pet_visible: true,
-            movement_paused: false,
-            custom_activity_area: None,
-            last_position: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct UserPreferences {
-    pet_size: PetSize,
-    activity_level: ActivityLevel,
-    always_on_top: bool,
-    custom_activity_area: Option<Rect>,
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -153,16 +64,6 @@ impl TimerSnapshot {
             ends_at_ms: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct MonitorPayload {
-    name: Option<String>,
-    position: Point,
-    size: Dimensions,
-    work_area: Rect,
-    scale_factor: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1680,160 +1581,6 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     }
 }
 
-fn collect_monitors(app: &AppHandle) -> Result<Vec<MonitorPayload>, String> {
-    let monitors = app.available_monitors().map_err(|err| err.to_string())?;
-    Ok(monitors
-        .into_iter()
-        .map(|monitor| {
-            let position = monitor.position();
-            let size = monitor.size();
-            let work_area = monitor.work_area();
-            MonitorPayload {
-                name: monitor.name().map(ToOwned::to_owned),
-                position: Point {
-                    x: position.x as f64,
-                    y: position.y as f64,
-                },
-                size: Dimensions {
-                    width: size.width as f64,
-                    height: size.height as f64,
-                },
-                work_area: Rect {
-                    x: work_area.position.x as f64,
-                    y: work_area.position.y as f64,
-                    width: work_area.size.width as f64,
-                    height: work_area.size.height as f64,
-                },
-                scale_factor: monitor.scale_factor(),
-            }
-        })
-        .collect())
-}
-
-fn default_activity_area(monitors: &[MonitorPayload]) -> Rect {
-    let work = monitors
-        .first()
-        .map(|monitor| monitor.work_area)
-        .unwrap_or(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1200.0,
-            height: 800.0,
-        });
-    Rect {
-        x: work.x + MIN_MARGIN,
-        y: work.y + MIN_MARGIN,
-        width: (work.width - MIN_MARGIN * 2.0).max(240.0),
-        height: (work.height - MIN_MARGIN * 2.0).max(180.0),
-    }
-}
-
-fn normalize_activity_area(
-    area: Rect,
-    default_area: Rect,
-    pet_dimensions: Dimensions,
-) -> Option<Rect> {
-    let min_width = pet_dimensions.width * 3.0;
-    let min_height = pet_dimensions.height * 2.0;
-    if area.width < min_width || area.height < min_height {
-        return None;
-    }
-
-    let x = area.x.max(default_area.x);
-    let y = area.y.max(default_area.y);
-    let right = (area.x + area.width).min(default_area.x + default_area.width);
-    let bottom = (area.y + area.height).min(default_area.y + default_area.height);
-    let normalized = Rect {
-        x,
-        y,
-        width: (right - x).max(0.0),
-        height: (bottom - y).max(0.0),
-    };
-
-    if normalized.width >= min_width && normalized.height >= min_height {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn initial_pet_position(activity_area: Rect, pet_dimensions: Dimensions) -> Point {
-    Point {
-        x: activity_area.x + (activity_area.width - pet_dimensions.width).max(0.0) * 0.78,
-        y: activity_area.y + (activity_area.height - pet_dimensions.height).max(0.0) * 0.72,
-    }
-}
-
-fn point_visible(point: Point, pet_dimensions: Dimensions, monitors: &[MonitorPayload]) -> bool {
-    monitors.iter().any(|monitor| {
-        let work = monitor.work_area;
-        point.x >= work.x
-            && point.y >= work.y
-            && point.x + pet_dimensions.width <= work.x + work.width
-            && point.y + pet_dimensions.height <= work.y + work.height
-    })
-}
-
-fn clamp_to_visible_work_area(
-    point: Point,
-    pet_dimensions: Dimensions,
-    monitors: &[MonitorPayload],
-) -> Point {
-    let work = monitors
-        .iter()
-        .find(|monitor| {
-            point.x >= monitor.work_area.x
-                && point.x <= monitor.work_area.x + monitor.work_area.width
-                && point.y >= monitor.work_area.y
-                && point.y <= monitor.work_area.y + monitor.work_area.height
-        })
-        .map(|monitor| monitor.work_area)
-        .or_else(|| monitors.first().map(|monitor| monitor.work_area))
-        .unwrap_or(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 1200.0,
-            height: 800.0,
-        });
-
-    Point {
-        x: point.x.clamp(
-            work.x,
-            (work.x + work.width - pet_dimensions.width).max(work.x),
-        ),
-        y: point.y.clamp(
-            work.y,
-            (work.y + work.height - pet_dimensions.height).max(work.y),
-        ),
-    }
-}
-
-fn pet_physical_dimensions(
-    logical_dimensions: Dimensions,
-    monitors: &[MonitorPayload],
-    position: Option<Point>,
-) -> Dimensions {
-    let scale_factor = position
-        .and_then(|point| monitor_for_point(point, monitors))
-        .or_else(|| monitors.first())
-        .map(|monitor| monitor.scale_factor)
-        .unwrap_or(1.0);
-
-    Dimensions {
-        width: logical_dimensions.width * scale_factor,
-        height: logical_dimensions.height * scale_factor,
-    }
-}
-
-fn monitor_for_point(point: Point, monitors: &[MonitorPayload]) -> Option<&MonitorPayload> {
-    monitors.iter().find(|monitor| {
-        point.x >= monitor.work_area.x
-            && point.x <= monitor.work_area.x + monitor.work_area.width
-            && point.y >= monitor.work_area.y
-            && point.y <= monitor.work_area.y + monitor.work_area.height
-    })
-}
-
 fn resize_and_place_pet_window(
     app: &AppHandle,
     position: Point,
@@ -1891,28 +1638,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_config_dir().map_err(|err| err.to_string())?;
-    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
-    Ok(dir.join(SETTINGS_FILE))
-}
-
-fn load_settings(app: &AppHandle) -> Settings {
-    let Ok(path) = settings_path(app) else {
-        return Settings::default();
-    };
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
-}
-
-fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
-    let path = settings_path(app)?;
-    let json = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
-    fs::write(path, json).map_err(|err| err.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
