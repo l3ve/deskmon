@@ -61,50 +61,60 @@ const defaultSlimeSkin: PetSkin = {
   draw: drawSlime,
 };
 
+const slimeSpriteFps: Record<PetMood, number> = {
+  idle: 3,
+  walk: 4.5,
+  run: 6.5,
+  sleep: 2,
+  "timer-waiting": 3,
+  celebrate: 7,
+  dragged: 3.5,
+};
+
 const slimeSpriteSheets: Record<PetMood, SpriteSheetDefinition> = {
   idle: {
     src: new URL("../assets/slime/idle.png", import.meta.url).href,
     columns: 6,
     rows: 1,
-    fps: 4,
+    fps: slimeSpriteFps.idle,
   },
   walk: {
     src: new URL("../assets/slime/walk.png", import.meta.url).href,
     columns: 6,
     rows: 2,
-    fps: 5,
+    fps: slimeSpriteFps.walk,
     directionalRows: { left: 0, right: 1 },
   },
   run: {
     src: new URL("../assets/slime/run.png", import.meta.url).href,
     columns: 6,
     rows: 2,
-    fps: 8,
+    fps: slimeSpriteFps.run,
     directionalRows: { right: 0, left: 1 },
   },
   sleep: {
     src: new URL("../assets/slime/sleep.png", import.meta.url).href,
     columns: 6,
     rows: 1,
-    fps: 3,
+    fps: slimeSpriteFps.sleep,
   },
   "timer-waiting": {
     src: new URL("../assets/slime/timer-waiting.png", import.meta.url).href,
     columns: 6,
     rows: 1,
-    fps: 4,
+    fps: slimeSpriteFps["timer-waiting"],
   },
   celebrate: {
     src: new URL("../assets/slime/celebrate.png", import.meta.url).href,
     columns: 6,
     rows: 1,
-    fps: 8,
+    fps: slimeSpriteFps.celebrate,
   },
   dragged: {
     src: new URL("../assets/slime/dragged.png", import.meta.url).href,
     columns: 6,
     rows: 1,
-    fps: 4,
+    fps: slimeSpriteFps.dragged,
   },
 };
 

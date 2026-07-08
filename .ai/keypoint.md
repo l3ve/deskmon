@@ -3,6 +3,7 @@
 ## Key Files
 
 - `src/pet.ts`: 桌宠控制器，负责拖拽、移动循环、悬停暂停、计时器事件和右键触发原生小菜单。
+- `src/pet/activityCadence.ts`: 桌宠活动节奏策略，集中管理安静/标准/活泼的速度、run 概率、休息窗口、到达阈值和状态切换节奏常量。
 - `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
 - `src/pet/giantCelebration.ts`: 倒计时结束巨型庆祝动效的状态、分段时间和尺寸/位置插值。
 - `src/pet/slime.ts`: 默认史莱姆 sprite sheet 加载、逐帧裁剪、锚点归一化和代码绘制兜底。
@@ -17,6 +18,7 @@
 - `docs/prds/002-remember-clipboard-history.md`: “记忆力”剪贴板历史功能边界和实现决策。
 - `docs/prds/003-remember-variable-library.md`: “记忆力”变量库的 key/value 私密取出、搜索和自动清理边界。
 - `docs/prds/004-timer-finished-giant-celebration.md`: 倒计时结束时巨型庆祝提醒/巨型庆祝动效的触发、分段、尺寸、恢复和测试边界。
+- `docs/prds/005-desktop-pet-animation-polish.md`: 桌宠动画节奏优化 PRD，限定为不新增能力、不改素材，只打磨现有 7 个状态的播放和移动观感。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -67,6 +69,9 @@
 - “记忆力”搜索覆盖“记忆中”“笔记本”“变量库”，但变量只搜索 key 和 note，不搜索 value。
 - 删除变量需要系统原生确认，确认文案只显示 key，并沿用确认后恢复“记忆力”窗口焦点的规则。
 - 默认皮肤优先使用 7 个状态 sprite sheet，代码绘制史莱姆保留为加载兜底。
+- 默认桌宠角色素材与应用 icon 保持一致：淡紫白小幽灵/软团子角色，替换时仍放在 `src/assets/slime/*.png` 并保持原 sprite sheet 布局。
+- 桌宠动画优化的下一步边界是先调代码节奏：以标准档为主手感，同步校准安静/活泼，不新增状态、不改 PNG 素材、不加新设置。
+- 桌宠活动档位参数从 `pet.ts` 移到 `src/pet/activityCadence.ts`；到达目标后的休息会保留本轮选中的 `idle`/`sleep`，避免 `sleep` 只闪一帧。
 - 桌宠前端保持模块边界：`pet.ts` 只做控制器流程，sprite 细节放 `src/pet/slime.ts`，巨型庆祝算法放 `src/pet/giantCelebration.ts`，通用坐标算法放 `src/pet/geometry.ts`。
 - Tauri 后端保持模块边界：`lib.rs` 只做 command、窗口/菜单和应用编排；屏幕/活动区域算法放 `geometry.rs`，settings 类型和持久化放 `settings.rs`。
 - `src-tauri/icons` 只保留 `tauri.conf.json` 的 `bundle.icon` 声明项：`32x32.png`、`128x128.png`、`128x128@2x.png`、`icon.icns`、`icon.ico`。
