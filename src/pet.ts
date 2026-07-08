@@ -21,9 +21,14 @@ import {
   type GiantPresentationFrame,
   type TemporaryPetPresentation,
 } from "./pet/giantCelebration";
+import {
+  activityProfiles,
+  chooseRestMood,
+  petCadence,
+  type RestMood,
+} from "./pet/activityCadence";
 import { spriteSlimeSkin, type PetFacing, type PetMood, type PetSkin } from "./pet/slime";
 import type {
-  ActivityLevel,
   BootstrapPayload,
   Dimensions,
   MonitorPayload,
@@ -41,20 +46,7 @@ interface DragState {
   active: boolean;
 }
 
-interface ActivityProfile {
-  speed: number;
-  runChance: number;
-  restMs: [number, number];
-}
-
-const activityProfiles: Record<ActivityLevel, ActivityProfile> = {
-  quiet: { speed: 55, runChance: 0.08, restMs: [5000, 9000] },
-  standard: { speed: 86, runChance: 0.2, restMs: [2800, 5600] },
-  lively: { speed: 128, runChance: 0.34, restMs: [1200, 3400] },
-};
-
 const clickThreshold = 7;
-const hoverFrameCheckIntervalMs = 250;
 const spriteCanvasSize = 32;
 
 export function mountPet(root: HTMLElement): void {
@@ -88,6 +80,7 @@ class PetController {
   private pointerOverPet = false;
   private hoverFrameCheckInFlight = false;
   private position: Point = { x: 0, y: 0 };
+  private restMood: RestMood = "idle";
   private restUntil = 0;
   private settings: Settings | null = null;
   private skin: PetSkin = spriteSlimeSkin;
@@ -242,30 +235,31 @@ class PetController {
     }
 
     if (settings.movementPaused) {
-      if (!this.timer.isRunning && time > this.restUntil + 7000) {
+      if (!this.timer.isRunning && time > this.restUntil + petCadence.pausedSleepDelayMs) {
         this.mood = "sleep";
       }
       return;
     }
 
     if (time < this.restUntil) {
-      this.mood = this.timer.isRunning ? "timer-waiting" : "idle";
+      this.mood = this.timer.isRunning ? "timer-waiting" : this.restMood;
       return;
     }
 
     const coordinateScale = this.coordinateScale();
+    const profile = activityProfiles[settings.activityLevel];
 
-    if (!this.target || near(this.position, this.target, 10 * coordinateScale)) {
+    if (!this.target || near(this.position, this.target, profile.arrivalThreshold * coordinateScale)) {
       this.requestWindowMove(this.position, true);
-      this.pickTarget();
-      const profile = activityProfiles[settings.activityLevel];
       this.restUntil = time + randomBetween(profile.restMs[0], profile.restMs[1]);
-      this.mood = Math.random() > 0.82 ? "sleep" : "idle";
+      this.restMood = chooseRestMood(profile);
+      this.mood = this.timer.isRunning ? "timer-waiting" : this.restMood;
+      this.pickTarget();
       return;
     }
 
-    const profile = activityProfiles[settings.activityLevel];
-    const speed = profile.speed * coordinateScale * (this.isMovingFast ? 1.55 : 1);
+    const speed =
+      profile.speed * coordinateScale * (this.isMovingFast ? profile.runSpeedMultiplier : 1);
     const next = moveTowards(this.position, this.target, speed * dtSeconds);
     this.updateFacing(next.x - this.position.x);
     this.position = clampPointToRect(next, this.activityArea, this.petWindowDimensions);
@@ -274,7 +268,7 @@ class PetController {
   }
 
   private updateFacing(deltaX: number): void {
-    if (Math.abs(deltaX) < 0.2) {
+    if (Math.abs(deltaX) < petCadence.facingChangeThreshold) {
       return;
     }
     this.facing = deltaX < 0 ? "left" : "right";
@@ -289,7 +283,7 @@ class PetController {
   private reconcilePointerHover(time: number): void {
     if (
       this.hoverFrameCheckInFlight ||
-      time - this.lastHoverFrameCheck < hoverFrameCheckIntervalMs
+      time - this.lastHoverFrameCheck < petCadence.hoverFrameCheckIntervalMs
     ) {
       return;
     }
@@ -338,7 +332,7 @@ class PetController {
   }
 
   private syncWindowPosition(time: number): void {
-    if (time - this.lastWindowSync < 55) {
+    if (time - this.lastWindowSync < petCadence.windowSyncIntervalMs) {
       return;
     }
     this.lastWindowSync = time;
@@ -481,7 +475,8 @@ class PetController {
     this.petWindowDimensions = restoreTarget.windowDimensions;
     this.position = position;
     this.mood = this.timer.isRunning ? "timer-waiting" : "idle";
-    this.restUntil = performance.now() + 1800;
+    this.restMood = "idle";
+    this.restUntil = performance.now() + petCadence.postCelebrationRestMs;
     this.resizeCanvas();
     this.requestTemporaryPetPresentation({
       position,
@@ -599,7 +594,8 @@ class PetController {
     this.finishDrag();
     if (wasDrag) {
       this.requestWindowMove(finalPosition, true);
-      this.restUntil = performance.now() + 1800;
+      this.restMood = "idle";
+      this.restUntil = performance.now() + petCadence.dragReleaseRestMs;
       this.pickTarget();
     }
   }
