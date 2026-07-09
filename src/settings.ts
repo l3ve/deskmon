@@ -3,11 +3,18 @@ import type {
   ActivityLevel,
   BootstrapPayload,
   Dimensions,
+  FocusTimerPreferences,
   PetSize,
   Point,
   Rect,
   UserPreferences,
 } from "./types";
+
+const timerMinMinutes = 1;
+const timerMaxMinutes = 180;
+const timerMessageMaxChars = 80;
+const defaultFocusFinishedMessage = "专注结束，休息一下吧";
+const defaultBreakFinishedMessage = "休息结束，回来继续吧";
 
 const sizeLabels: Record<PetSize, string> = {
   small: "小",
@@ -67,6 +74,7 @@ class SettingsController {
       this.summaryItem("尺寸", sizeLabels[settings.petSize]),
       this.summaryItem("活跃", activityLabels[settings.activityLevel]),
       this.summaryItem("置顶", settings.alwaysOnTop ? "开启" : "关闭"),
+      this.summaryItem("计时", this.focusTimerSummary(settings.focusTimer)),
       this.summaryItem("区域", this.customArea ? formatDimensions(this.customArea) : "默认"),
     );
 
@@ -94,6 +102,8 @@ class SettingsController {
     );
     controls.append(fields);
 
+    const focusTimerPanel = this.focusTimerPanel(settings.focusTimer);
+
     const areaPanel = element("section", "settings-panel area-panel");
     const areaHeader = element("div", "panel-header");
     areaHeader.append(element("h2", "", "活动区域"));
@@ -114,7 +124,7 @@ class SettingsController {
     areaPanel.append(areaHeader, canvasWrap, this.status);
 
     const content = element("main", "settings-content");
-    content.append(controls, areaPanel);
+    content.append(controls, focusTimerPanel, areaPanel);
 
     const workspace = element("div", "settings-workspace");
     workspace.append(sidebar, content);
@@ -166,6 +176,172 @@ class SettingsController {
     return field;
   }
 
+  private focusTimerPanel(focusTimer: FocusTimerPreferences): HTMLElement {
+    const panel = element("section", "settings-panel focus-timer-panel");
+    const header = element("div", "panel-header");
+    header.append(element("h2", "", "专注计时"));
+
+    const fields = element("div", "settings-fields");
+    const focusRow = element("div", "field-row timer-field-row");
+    focusRow.append(element("span", "field-label", "专注时长"));
+    const focusGroup = element("div", "timer-number-group");
+    focusTimer.focusMinutes.forEach((minutes, index) => {
+      focusGroup.append(
+        this.numberInput(minutes, `专注 ${index + 1}`, (nextMinutes) => {
+          const next = cloneFocusTimer(focusTimer);
+          next.focusMinutes[index] = nextMinutes;
+          this.saveFocusTimer(next);
+        }),
+      );
+    });
+    focusRow.append(focusGroup);
+
+    fields.append(
+      focusRow,
+      this.numberField("休息时长", focusTimer.breakMinutes, (breakMinutes) => {
+        const next = cloneFocusTimer(focusTimer);
+        next.breakMinutes = breakMinutes;
+        this.saveFocusTimer(next);
+      }),
+      this.messageField("专注结束提示", focusTimer.focusFinishedMessage, (message) => {
+        const next = cloneFocusTimer(focusTimer);
+        next.focusFinishedMessage = message;
+        this.saveFocusTimer(next);
+      }),
+      this.messageField("休息结束提示", focusTimer.breakFinishedMessage, (message) => {
+        const next = cloneFocusTimer(focusTimer);
+        next.breakFinishedMessage = message;
+        this.saveFocusTimer(next);
+      }),
+      this.toggleControl("休息结束播放声音", focusTimer.breakSoundEnabled, (breakSoundEnabled) => {
+        const next = cloneFocusTimer(focusTimer);
+        next.breakSoundEnabled = breakSoundEnabled;
+        this.saveFocusTimer(next);
+      }),
+    );
+
+    panel.append(header, fields);
+    return panel;
+  }
+
+  private numberField(
+    label: string,
+    value: number,
+    onChange: (value: number) => void,
+  ): HTMLElement {
+    const field = element("div", "field-row timer-field-row");
+    field.append(element("span", "field-label", label), this.numberInput(value, label, onChange));
+    return field;
+  }
+
+  private numberInput(
+    value: number,
+    label: string,
+    onChange: (value: number) => void,
+  ): HTMLElement {
+    const wrap = element("div", "timer-number-wrap");
+    const control = element("div", "timer-number-control");
+    const input = document.createElement("input");
+    const stepper = element("div", "timer-stepper");
+    const increment = element(
+      "button",
+      "timer-stepper-button timer-stepper-button-up",
+    ) as HTMLButtonElement;
+    const decrement = element(
+      "button",
+      "timer-stepper-button timer-stepper-button-down",
+    ) as HTMLButtonElement;
+
+    decrement.type = "button";
+    decrement.title = `${label}减少 1 分钟`;
+    decrement.setAttribute("aria-label", `${label}减少 1 分钟`);
+    increment.type = "button";
+    increment.title = `${label}增加 1 分钟`;
+    increment.setAttribute("aria-label", `${label}增加 1 分钟`);
+
+    input.className = "settings-number-input";
+    input.type = "text";
+    input.inputMode = "numeric";
+    input.pattern = "[0-9]*";
+    input.value = String(value);
+    input.setAttribute("aria-label", label);
+
+    const parseInput = (): number => {
+      const raw = input.value.trim();
+      return /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+    };
+    const clampMinutes = (minutes: number): number =>
+      Math.min(timerMaxMinutes, Math.max(timerMinMinutes, minutes));
+    let stepping = false;
+    const commitInput = (): void => {
+      if (stepping) {
+        return;
+      }
+      onChange(parseInput());
+    };
+    const step = (delta: number): void => {
+      const current = parseInput();
+      const next = clampMinutes((Number.isInteger(current) ? current : value) + delta);
+      stepping = true;
+      input.value = String(next);
+      input.blur();
+      stepping = false;
+      onChange(next);
+    };
+    const keepFocusStable = (event: Event): void => {
+      event.preventDefault();
+    };
+
+    decrement.addEventListener("pointerdown", keepFocusStable);
+    increment.addEventListener("pointerdown", keepFocusStable);
+    decrement.addEventListener("click", () => step(-1));
+    increment.addEventListener("click", () => step(1));
+    input.addEventListener("blur", commitInput);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        commitInput();
+        input.blur();
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        input.value = String(value);
+        input.blur();
+      }
+    });
+
+    stepper.append(increment, decrement);
+    control.append(input, stepper);
+    wrap.append(control, element("span", "timer-unit", "分钟"));
+    return wrap;
+  }
+
+  private messageField(
+    label: string,
+    value: string,
+    onChange: (value: string) => void,
+  ): HTMLElement {
+    const field = element("label", "field-row timer-message-row");
+    field.append(element("span", "field-label", label));
+    const input = document.createElement("textarea");
+    input.className = "settings-textarea";
+    input.maxLength = timerMessageMaxChars;
+    input.rows = 2;
+    input.value = value;
+    input.addEventListener("change", () => onChange(input.value));
+    field.append(input);
+    return field;
+  }
+
+  private saveFocusTimer(next: FocusTimerPreferences): void {
+    const normalized = normalizeFocusTimer(next);
+    if (typeof normalized === "string") {
+      this.setStatus(normalized, "error");
+      return;
+    }
+    this.save({ focusTimer: normalized });
+  }
+
   private save(patch: Partial<UserPreferences>): void {
     if (!this.bootstrap) {
       return;
@@ -176,12 +352,16 @@ class SettingsController {
       petSize: settings.petSize,
       activityLevel: settings.activityLevel,
       alwaysOnTop: settings.alwaysOnTop,
+      focusTimer: cloneFocusTimer(settings.focusTimer),
       customActivityArea: this.customArea,
     };
     const preferences: UserPreferences = {
       petSize: patch.petSize ?? current.petSize,
       activityLevel: patch.activityLevel ?? current.activityLevel,
       alwaysOnTop: patch.alwaysOnTop ?? current.alwaysOnTop,
+      focusTimer: patch.focusTimer
+        ? cloneFocusTimer(patch.focusTimer)
+        : cloneFocusTimer(current.focusTimer),
       customActivityArea:
         patch.customActivityArea === undefined ? current.customActivityArea : patch.customActivityArea,
     };
@@ -391,6 +571,10 @@ class SettingsController {
     return `当前 ${formatDimensions(area)}，至少 ${formatDimensions(this.minimumAreaDimensions())}`;
   }
 
+  private focusTimerSummary(focusTimer: FocusTimerPreferences): string {
+    return `${focusTimer.focusMinutes.join("/")}，休息 ${focusTimer.breakMinutes}`;
+  }
+
   private setStatus(
     message: string,
     tone: "neutral" | "success" | "warning" | "error" = "neutral",
@@ -453,6 +637,63 @@ function normalizeRect(a: Point, b: Point): Rect {
 
 function formatDimensions(size: Dimensions): string {
   return `${Math.round(size.width)} x ${Math.round(size.height)}`;
+}
+
+function cloneFocusTimer(focusTimer: FocusTimerPreferences): FocusTimerPreferences {
+  return {
+    focusMinutes: [...focusTimer.focusMinutes] as [number, number, number],
+    breakMinutes: focusTimer.breakMinutes,
+    focusFinishedMessage: focusTimer.focusFinishedMessage,
+    breakFinishedMessage: focusTimer.breakFinishedMessage,
+    breakSoundEnabled: focusTimer.breakSoundEnabled,
+  };
+}
+
+function normalizeFocusTimer(
+  focusTimer: FocusTimerPreferences,
+): FocusTimerPreferences | string {
+  const focusMinutes = [...focusTimer.focusMinutes];
+  for (const minutes of focusMinutes) {
+    const error = validateTimerMinutes(minutes, "专注时长");
+    if (error) {
+      return error;
+    }
+  }
+  focusMinutes.sort((left, right) => left - right);
+  if (new Set(focusMinutes).size !== focusMinutes.length) {
+    return "专注快捷时长不能重复";
+  }
+  const breakError = validateTimerMinutes(focusTimer.breakMinutes, "休息时长");
+  if (breakError) {
+    return breakError;
+  }
+
+  return {
+    focusMinutes: focusMinutes as [number, number, number],
+    breakMinutes: focusTimer.breakMinutes,
+    focusFinishedMessage: normalizeTimerMessage(
+      focusTimer.focusFinishedMessage,
+      defaultFocusFinishedMessage,
+    ),
+    breakFinishedMessage: normalizeTimerMessage(
+      focusTimer.breakFinishedMessage,
+      defaultBreakFinishedMessage,
+    ),
+    breakSoundEnabled: focusTimer.breakSoundEnabled,
+  };
+}
+
+function validateTimerMinutes(value: number, label: string): string | null {
+  if (!Number.isInteger(value) || value < timerMinMinutes || value > timerMaxMinutes) {
+    return `${label}需要在 ${timerMinMinutes}-${timerMaxMinutes} 分钟之间`;
+  }
+  return null;
+}
+
+function normalizeTimerMessage(message: string, defaultMessage: string): string {
+  const flattened = message.replace(/[\r\n]+/g, " ").trim();
+  const value = flattened || defaultMessage;
+  return Array.from(value).slice(0, timerMessageMaxChars).join("");
 }
 
 function unionRects(rects: Rect[]): Rect {

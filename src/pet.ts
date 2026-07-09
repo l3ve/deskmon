@@ -88,6 +88,7 @@ class PetController {
   private temporaryPresentationInFlight = false;
   private timer: TimerSnapshot = {
     isRunning: false,
+    kind: null,
     durationSeconds: 0,
     remainingSeconds: 0,
     endsAtMs: null,
@@ -141,6 +142,7 @@ class PetController {
     void listen("deskmon-timer-finished", () => {
       this.timer = {
         isRunning: false,
+        kind: null,
         durationSeconds: 0,
         remainingSeconds: 0,
         endsAtMs: null,
