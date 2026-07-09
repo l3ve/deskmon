@@ -1,5 +1,6 @@
 export type PetSize = "small" | "medium" | "large";
 export type ActivityLevel = "quiet" | "standard" | "lively";
+export type TimerKind = "focus" | "break";
 
 export interface Point {
   x: number;
@@ -17,16 +18,26 @@ export interface Settings {
   petSize: PetSize;
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
+  focusTimer: FocusTimerPreferences;
   petVisible: boolean;
   movementPaused: boolean;
   customActivityArea: Rect | null;
   lastPosition: Point | null;
 }
 
+export interface FocusTimerPreferences {
+  focusMinutes: [number, number, number];
+  breakMinutes: number;
+  focusFinishedMessage: string;
+  breakFinishedMessage: string;
+  breakSoundEnabled: boolean;
+}
+
 export interface UserPreferences {
   petSize: PetSize;
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
+  focusTimer: FocusTimerPreferences;
   customActivityArea: Rect | null;
 }
 
@@ -40,6 +51,7 @@ export interface MonitorPayload {
 
 export interface TimerSnapshot {
   isRunning: boolean;
+  kind: TimerKind | null;
   durationSeconds: number;
   remainingSeconds: number;
   endsAtMs: number | null;

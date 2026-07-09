@@ -8,7 +8,12 @@ use geometry::{
     Point, Rect,
 };
 use serde::{Deserialize, Serialize};
-use settings::{load_settings, save_settings, Settings, UserPreferences};
+use settings::{
+    load_settings, normalize_focus_timer_preferences, save_settings, validate_timer_minutes,
+    FocusTimerPreferences, Settings, UserPreferences,
+};
+#[cfg(target_os = "macos")]
+use std::process::Command;
 use std::{
     sync::Mutex,
     thread,
@@ -38,18 +43,31 @@ const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
 const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
+#[cfg(target_os = "macos")]
+const TIMER_SYSTEM_SOUND_PATH: &str = "/System/Library/Sounds/Glass.aiff";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum TimerKind {
+    Focus,
+    Break,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TimerState {
+    kind: TimerKind,
     duration_seconds: u64,
     ends_at_ms: u64,
+    finished_message: String,
+    play_sound: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TimerSnapshot {
     is_running: bool,
+    kind: Option<TimerKind>,
     duration_seconds: u64,
     remaining_seconds: u64,
     ends_at_ms: Option<u64>,
@@ -59,6 +77,7 @@ impl TimerSnapshot {
     fn idle() -> Self {
         Self {
             is_running: false,
+            kind: None,
             duration_seconds: 0,
             remaining_seconds: 0,
             ends_at_ms: None,
@@ -284,6 +303,7 @@ fn save_user_preferences(
         settings.pet_size = preferences.pet_size;
         settings.activity_level = preferences.activity_level;
         settings.always_on_top = preferences.always_on_top;
+        settings.focus_timer = normalize_focus_timer_preferences(preferences.focus_timer)?;
         settings.custom_activity_area = normalized_area;
         save_settings(&app, &settings)?;
     }
@@ -317,7 +337,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html#settings".into()),
     )
     .title("Deskmon 设置")
-    .inner_size(720.0, 620.0)
+    .inner_size(920.0, 720.0)
     .min_inner_size(620.0, 520.0)
     .center()
     .resizable(true)
@@ -914,11 +934,10 @@ fn relocate_pet_to_activity_area(
 fn start_timer_inner(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
+    kind: TimerKind,
     minutes: u64,
 ) -> Result<TimerSnapshot, String> {
-    if !matches!(minutes, 1 | 5 | 10 | 25) {
-        return Err("unsupported timer duration".into());
-    }
+    validate_timer_minutes(minutes, "计时时长")?;
     {
         let timer = state.timer.lock().map_err(|_| "timer lock poisoned")?;
         if timer.is_some() {
@@ -926,15 +945,25 @@ fn start_timer_inner(
         }
     }
 
+    let focus_timer = state
+        .settings
+        .lock()
+        .map_err(|_| "settings lock poisoned")?
+        .focus_timer
+        .clone();
+    let (finished_message, play_sound) = timer_completion_policy(kind, &focus_timer);
     let duration_seconds = minutes * 60;
     let ends_at_ms = now_ms() + duration_seconds * 1000;
     let next_timer = TimerState {
+        kind,
         duration_seconds,
         ends_at_ms,
+        finished_message,
+        play_sound,
     };
     {
         let mut timer = state.timer.lock().map_err(|_| "timer lock poisoned")?;
-        *timer = Some(next_timer);
+        *timer = Some(next_timer.clone());
     }
     update_tray_menu(app)?;
     let snapshot = timer_snapshot(state);
@@ -943,6 +972,16 @@ fn start_timer_inner(
         .map_err(|err| err.to_string())?;
     spawn_timer_worker(app.clone(), next_timer);
     Ok(snapshot)
+}
+
+fn timer_completion_policy(kind: TimerKind, focus_timer: &FocusTimerPreferences) -> (String, bool) {
+    match kind {
+        TimerKind::Focus => (focus_timer.focus_finished_message.clone(), false),
+        TimerKind::Break => (
+            focus_timer.break_finished_message.clone(),
+            focus_timer.break_sound_enabled,
+        ),
+    }
 }
 
 fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
@@ -956,10 +995,10 @@ fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
                 Ok(timer) => timer,
                 Err(_) => break,
             };
-            *timer
+            timer.clone()
         };
 
-        if current.map(|timer| timer.ends_at_ms) != Some(started_timer.ends_at_ms) {
+        if current.as_ref().map(|timer| timer.ends_at_ms) != Some(started_timer.ends_at_ms) {
             break;
         }
 
@@ -973,7 +1012,7 @@ fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
                     Ok(timer) => timer,
                     Err(_) => break,
                 };
-                if timer.map(|timer| timer.ends_at_ms) == Some(started_timer.ends_at_ms) {
+                if timer.as_ref().map(|timer| timer.ends_at_ms) == Some(started_timer.ends_at_ms) {
                     *timer = None;
                     true
                 } else {
@@ -983,18 +1022,36 @@ fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
             if finished {
                 clear_timer_menu_items(&state);
                 let _ = update_tray_menu(&app);
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("Deskmon")
-                    .body("计时结束啦")
-                    .show();
+                let _ = show_timer_finished_notification(&app, &started_timer);
+                play_timer_finished_sound(&started_timer);
                 let _ = app.emit("deskmon-timer-finished", started_timer);
                 let _ = app.emit("deskmon-timer-changed", TimerSnapshot::idle());
             }
             break;
         }
     });
+}
+
+fn show_timer_finished_notification(app: &AppHandle, timer: &TimerState) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title("Deskmon")
+        .body(timer.finished_message.clone())
+        .show()
+        .map_err(|err| err.to_string())
+}
+
+fn play_timer_finished_sound(timer: &TimerState) {
+    if !timer.play_sound {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        thread::spawn(|| {
+            let _ = Command::new("afplay").arg(TIMER_SYSTEM_SOUND_PATH).status();
+        });
+    }
 }
 
 fn spawn_clipboard_worker(app: AppHandle) {
@@ -1283,7 +1340,7 @@ fn build_tray_menu(
         builder = builder.item(&status).text("cancel_timer", "取消当前计时");
     } else {
         remember_tray_timer_status(state, None)?;
-        let submenu = build_timer_submenu(app)?;
+        let submenu = build_timer_submenu(app, &settings.focus_timer)?;
         builder = builder.item(&submenu);
     }
 
@@ -1331,7 +1388,7 @@ fn build_pet_menu(
             .separator();
     } else {
         remember_pet_timer_status(state, None)?;
-        let submenu = build_timer_submenu(app)?;
+        let submenu = build_timer_submenu(app, &settings.focus_timer)?;
         builder = builder.item(&submenu).separator();
     }
 
@@ -1344,12 +1401,22 @@ fn build_pet_menu(
     builder.build().map_err(|err| err.to_string())
 }
 
-fn build_timer_submenu(app: &AppHandle) -> Result<Submenu<tauri::Wry>, String> {
-    SubmenuBuilder::new(app, "计时器")
-        .text("start_timer_1", "1 分钟")
-        .text("start_timer_5", "5 分钟")
-        .text("start_timer_10", "10 分钟")
-        .text("start_timer_25", "25 分钟")
+fn build_timer_submenu(
+    app: &AppHandle,
+    focus_timer: &FocusTimerPreferences,
+) -> Result<Submenu<tauri::Wry>, String> {
+    let mut builder = SubmenuBuilder::new(app, "专注计时");
+    for (index, minutes) in focus_timer.focus_minutes.iter().enumerate() {
+        builder = builder.text(
+            format!("start_focus_timer_{index}"),
+            format!("专注 {minutes} 分钟"),
+        );
+    }
+    builder
+        .text(
+            "start_break_timer",
+            format!("休息 {} 分钟", focus_timer.break_minutes),
+        )
         .build()
         .map_err(|err| err.to_string())
 }
@@ -1434,7 +1501,15 @@ fn build_remember_variable_submenu(
 }
 
 fn timer_status_label(timer: &TimerSnapshot) -> String {
-    format!("计时中：还剩 {}", format_remaining(timer.remaining_seconds))
+    let label = match timer.kind {
+        Some(TimerKind::Focus) => "专注中",
+        Some(TimerKind::Break) => "休息中",
+        None => "计时中",
+    };
+    format!(
+        "{label}：还剩 {}",
+        format_remaining(timer.remaining_seconds)
+    )
 }
 
 fn remember_tray_timer_status(
@@ -1514,6 +1589,19 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         }
         return;
     }
+    if let Some(index) = event_id.strip_prefix("start_focus_timer_") {
+        if let Ok(index) = index.parse::<usize>() {
+            let minutes = state
+                .settings
+                .lock()
+                .ok()
+                .and_then(|settings| settings.focus_timer.focus_minutes.get(index).copied());
+            if let Some(minutes) = minutes {
+                let _ = start_timer_inner(app, &state, TimerKind::Focus, minutes);
+            }
+        }
+        return;
+    }
     match event_id {
         "toggle_pet" => {
             let visible = state
@@ -1565,17 +1653,13 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
             let snapshot = timer_snapshot(&state);
             let _ = app.emit("deskmon-timer-changed", &snapshot);
         }
-        "start_timer_1" => {
-            let _ = start_timer_inner(app, &state, 1);
-        }
-        "start_timer_5" => {
-            let _ = start_timer_inner(app, &state, 5);
-        }
-        "start_timer_10" => {
-            let _ = start_timer_inner(app, &state, 10);
-        }
-        "start_timer_25" => {
-            let _ = start_timer_inner(app, &state, 25);
+        "start_break_timer" => {
+            let minutes = state
+                .settings
+                .lock()
+                .map(|settings| settings.focus_timer.break_minutes)
+                .unwrap_or(5);
+            let _ = start_timer_inner(app, &state, TimerKind::Break, minutes);
         }
         _ => {}
     }
@@ -1612,7 +1696,7 @@ fn move_pet_window_to(app: &AppHandle, position: Point) -> Result<(), String> {
 
 fn timer_snapshot(state: &tauri::State<'_, AppState>) -> TimerSnapshot {
     let timer = match state.timer.lock() {
-        Ok(timer) => *timer,
+        Ok(timer) => timer.clone(),
         Err(_) => None,
     };
     timer.map_or_else(TimerSnapshot::idle, |timer| {
@@ -1620,6 +1704,7 @@ fn timer_snapshot(state: &tauri::State<'_, AppState>) -> TimerSnapshot {
         let remaining_ms = timer.ends_at_ms.saturating_sub(now);
         TimerSnapshot {
             is_running: remaining_ms > 0,
+            kind: Some(timer.kind),
             duration_seconds: timer.duration_seconds,
             remaining_seconds: remaining_ms.div_ceil(1000),
             ends_at_ms: Some(timer.ends_at_ms),
@@ -1638,6 +1723,46 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timer_completion_policy_uses_kind_specific_message_and_sound() {
+        let preferences = FocusTimerPreferences {
+            focus_finished_message: "回头休息".into(),
+            break_finished_message: "回来继续".into(),
+            break_sound_enabled: true,
+            ..FocusTimerPreferences::default()
+        };
+
+        let focus = timer_completion_policy(TimerKind::Focus, &preferences);
+        assert_eq!(focus, ("回头休息".into(), false));
+
+        let break_timer = timer_completion_policy(TimerKind::Break, &preferences);
+        assert_eq!(break_timer, ("回来继续".into(), true));
+    }
+
+    #[test]
+    fn timer_status_label_matches_focus_and_break_modes() {
+        let focus = TimerSnapshot {
+            is_running: true,
+            kind: Some(TimerKind::Focus),
+            duration_seconds: 1500,
+            remaining_seconds: 754,
+            ends_at_ms: Some(1),
+        };
+        assert_eq!(timer_status_label(&focus), "专注中：还剩 12:34");
+
+        let break_timer = TimerSnapshot {
+            kind: Some(TimerKind::Break),
+            remaining_seconds: 62,
+            ..focus
+        };
+        assert_eq!(timer_status_label(&break_timer), "休息中：还剩 01:02");
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

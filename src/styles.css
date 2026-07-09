@@ -191,15 +191,19 @@ button {
 }
 
 .settings-content {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   min-width: 0;
   min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .settings-controls {
-  overflow: hidden;
+  flex: 0 0 auto;
 }
 
 .settings-controls h2,
@@ -234,9 +238,133 @@ button {
 }
 
 .field-label {
+  flex: 0 0 auto;
   color: #34473b;
   font-size: 14px;
   font-weight: 680;
+}
+
+.focus-timer-panel {
+  flex: 0 0 auto;
+}
+
+.timer-field-row {
+  align-items: center;
+}
+
+.timer-number-group {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.timer-number-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 94px;
+}
+
+.timer-number-control {
+  display: inline-grid;
+  grid-template-columns: 58px 20px;
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid #cbd5ca;
+  border-radius: 7px;
+  background: #ffffff;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.timer-number-control:focus-within {
+  border-color: #77bd98;
+  box-shadow: 0 0 0 3px rgba(47, 139, 93, 0.12);
+}
+
+.settings-number-input,
+.settings-textarea {
+  border: 1px solid #cbd5ca;
+  border-radius: 7px;
+  color: #1e3328;
+  background: #ffffff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.settings-number-input {
+  width: 58px;
+  height: 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0 8px;
+  text-align: center;
+}
+
+.timer-stepper {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  border-left: 1px solid #e1e7df;
+}
+
+.timer-stepper-button {
+  position: relative;
+  width: 20px;
+  height: 15px;
+  border: 0;
+  border-radius: 0;
+  color: #536358;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.timer-stepper-button + .timer-stepper-button {
+  border-top: 1px solid #e1e7df;
+}
+
+.timer-stepper-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translate(-50%, -50%);
+}
+
+.timer-stepper-button-up::before {
+  border-right: 4px solid transparent;
+  border-bottom: 5px solid currentColor;
+  border-left: 4px solid transparent;
+}
+
+.timer-stepper-button-down::before {
+  border-top: 5px solid currentColor;
+  border-right: 4px solid transparent;
+  border-left: 4px solid transparent;
+}
+
+.timer-unit {
+  color: #65746b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.timer-message-row {
+  align-items: flex-start;
+}
+
+.settings-textarea {
+  width: min(360px, 100%);
+  min-height: 52px;
+  resize: vertical;
+  padding: 8px 10px;
+  line-height: 1.35;
 }
 
 .segmented {
@@ -267,7 +395,8 @@ button {
 }
 
 .segmented button:hover,
-.ghost-button:hover {
+.ghost-button:hover,
+.timer-stepper-button:hover {
   background: #e9f0ea;
 }
 
@@ -323,10 +452,7 @@ button {
 }
 
 .area-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 0;
-  overflow: hidden;
+  flex: 0 0 auto;
 }
 
 .panel-header {
@@ -344,7 +470,8 @@ button {
 }
 
 .canvas-wrap {
-  min-height: 0;
+  height: clamp(190px, 30vh, 280px);
+  min-height: 190px;
   margin: 14px 16px 0;
   border: 1px solid #d8dfd6;
   border-radius: 8px;
@@ -356,7 +483,6 @@ button {
   display: block;
   width: 100%;
   height: 100%;
-  min-height: 260px;
   cursor: crosshair;
 }
 
@@ -1161,6 +1287,11 @@ button {
   outline-offset: 2px;
 }
 
+.settings-root .settings-number-input:focus-visible,
+.settings-root .timer-stepper-button:focus-visible {
+  outline: 0;
+}
+
 @media (prefers-color-scheme: dark) {
   .settings-root,
   .remember-root {
@@ -1181,6 +1312,8 @@ button {
   }
 
   .settings-summary-item,
+  .timer-number-control,
+  .settings-textarea,
   .remember-detail-metric,
   .remember-secret-panel,
   .remember-note-panel,
@@ -1193,7 +1326,14 @@ button {
     background: #202821;
   }
 
+  .settings-number-input {
+    color: #e6eee8;
+    background: transparent;
+  }
+
   .settings-summary-item strong,
+  .settings-number-input,
+  .settings-textarea,
   .remember-detail-metric strong,
   .remember-search-input,
   .remember-secret-value,
@@ -1228,7 +1368,8 @@ button {
 
   .remember-filter-button:hover,
   .segmented button:hover,
-  .ghost-button:hover {
+  .ghost-button:hover,
+  .timer-stepper-button:hover {
     background: #263129;
   }
 
@@ -1249,6 +1390,8 @@ button {
   .remember-section-header,
   .remember-detail-header,
   .settings-controls h2,
+  .timer-number-control,
+  .settings-textarea,
   .panel-header,
   .field-row {
     border-color: #2d3931;
@@ -1261,6 +1404,19 @@ button {
     background: #202821;
   }
 
+  .timer-stepper {
+    border-left-color: #2d3931;
+  }
+
+  .timer-stepper-button {
+    color: #b3c3ba;
+    background: transparent;
+  }
+
+  .timer-stepper-button + .timer-stepper-button {
+    border-top-color: #2d3931;
+  }
+
   .canvas-wrap {
     border-color: #334139;
     background: #202821;
@@ -1271,20 +1427,6 @@ button {
   .settings-shell,
   .remember-shell {
     padding: 16px;
-  }
-
-  .settings-workspace {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .settings-sidebar {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
-  }
-
-  .settings-sidebar-title {
-    display: none;
   }
 
   .remember-toolbar {
@@ -1319,6 +1461,22 @@ button {
   }
 }
 
+@media (max-width: 700px) {
+  .settings-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-sidebar {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .settings-sidebar-title {
+    display: none;
+  }
+}
+
 @media (max-width: 640px) {
   .settings-sidebar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1327,6 +1485,14 @@ button {
   .field-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .timer-number-group {
+    justify-content: flex-start;
+  }
+
+  .settings-textarea {
+    width: 100%;
   }
 
   .segmented,
