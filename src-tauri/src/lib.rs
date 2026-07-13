@@ -1,16 +1,21 @@
+mod focus_session;
 mod geometry;
 mod remember;
 mod settings;
 
+use focus_session::{
+    CompletionFeedback, FocusSession, FocusSessionAction, FocusSessionConfig, FocusSessionPhase,
+    FocusSessionSnapshot, TimerKind, EXTRA_SEGMENT_MINUTES,
+};
 use geometry::{
     clamp_to_visible_work_area, collect_monitors, default_activity_area, initial_pet_position,
     normalize_activity_area, pet_physical_dimensions, point_visible, Dimensions, MonitorPayload,
     Point, Rect,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use settings::{
-    load_settings, normalize_focus_timer_preferences, save_settings, validate_timer_minutes,
-    FocusTimerPreferences, Settings, UserPreferences,
+    load_settings, normalize_focus_timer_preferences, save_settings, FocusTimerPreferences,
+    Settings, UserPreferences,
 };
 #[cfg(target_os = "macos")]
 use std::process::Command;
@@ -46,45 +51,6 @@ const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
 #[cfg(target_os = "macos")]
 const TIMER_SYSTEM_SOUND_PATH: &str = "/System/Library/Sounds/Glass.aiff";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-enum TimerKind {
-    Focus,
-    Break,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TimerState {
-    kind: TimerKind,
-    duration_seconds: u64,
-    ends_at_ms: u64,
-    finished_message: String,
-    play_sound: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TimerSnapshot {
-    is_running: bool,
-    kind: Option<TimerKind>,
-    duration_seconds: u64,
-    remaining_seconds: u64,
-    ends_at_ms: Option<u64>,
-}
-
-impl TimerSnapshot {
-    fn idle() -> Self {
-        Self {
-            is_running: false,
-            kind: None,
-            duration_seconds: 0,
-            remaining_seconds: 0,
-            ends_at_ms: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BootstrapPayload {
@@ -95,7 +61,7 @@ struct BootstrapPayload {
     pet_dimensions: Dimensions,
     pet_window_dimensions: Dimensions,
     pet_position: Point,
-    timer: TimerSnapshot,
+    focus_session: FocusSessionSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,10 +72,17 @@ struct WindowFramePayload {
     cursor: Point,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FocusPresentationContext {
+    monitors: Vec<MonitorPayload>,
+    cursor: Point,
+}
+
 #[derive(Default)]
 struct AppState {
     settings: Mutex<Settings>,
-    timer: Mutex<Option<TimerState>>,
+    focus_session: Mutex<FocusSession>,
     remember: Mutex<remember::RememberState>,
     menu_items: Mutex<MenuItems>,
     last_position_saved_at_ms: Mutex<u64>,
@@ -149,7 +122,10 @@ fn get_bootstrap(
     let settings_snapshot = settings.clone();
     drop(settings);
 
-    resize_and_place_pet_window(&app, position, pet_dimensions)?;
+    let focus_session = focus_session_snapshot(&state);
+    if !focus_session.phase.uses_central_presentation() {
+        resize_and_place_pet_window(&app, position, pet_dimensions)?;
+    }
     save_settings(&app, &settings_snapshot)?;
 
     Ok(BootstrapPayload {
@@ -160,7 +136,7 @@ fn get_bootstrap(
         pet_dimensions,
         pet_window_dimensions,
         pet_position: position,
-        timer: timer_snapshot(&state),
+        focus_session,
     })
 }
 
@@ -189,6 +165,18 @@ fn get_pet_window_frame(app: AppHandle) -> Result<WindowFramePayload, String> {
             width: size.width as f64,
             height: size.height as f64,
         },
+        cursor: Point {
+            x: cursor.x,
+            y: cursor.y,
+        },
+    })
+}
+
+#[tauri::command]
+fn get_focus_presentation_context(app: AppHandle) -> Result<FocusPresentationContext, String> {
+    let cursor = app.cursor_position().map_err(|err| err.to_string())?;
+    Ok(FocusPresentationContext {
+        monitors: collect_monitors(&app)?,
         cursor: Point {
             x: cursor.x,
             y: cursor.y,
@@ -247,6 +235,7 @@ fn set_pet_temporary_presentation(
     width: f64,
     height: f64,
     always_on_top: bool,
+    visible: bool,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(PET_WINDOW) {
         window
@@ -261,6 +250,11 @@ fn set_pet_temporary_presentation(
         window
             .set_always_on_top(always_on_top)
             .map_err(|err| err.to_string())?;
+        if visible {
+            window.show().map_err(|err| err.to_string())?;
+        } else {
+            window.hide().map_err(|err| err.to_string())?;
+        }
     }
     Ok(())
 }
@@ -308,16 +302,23 @@ fn save_user_preferences(
         save_settings(&app, &settings)?;
     }
 
-    if let Some(window) = app.get_webview_window(PET_WINDOW) {
-        window
-            .set_always_on_top(preferences.always_on_top)
-            .map_err(|err| err.to_string())?;
-        window
-            .set_size(Size::Logical(LogicalSize::new(
-                pet_dimensions.width,
-                pet_dimensions.height,
-            )))
-            .map_err(|err| err.to_string())?;
+    let uses_central_presentation = state
+        .focus_session
+        .lock()
+        .map(|session| session.phase().uses_central_presentation())
+        .unwrap_or(false);
+    if !uses_central_presentation {
+        if let Some(window) = app.get_webview_window(PET_WINDOW) {
+            window
+                .set_always_on_top(preferences.always_on_top)
+                .map_err(|err| err.to_string())?;
+            window
+                .set_size(Size::Logical(LogicalSize::new(
+                    pet_dimensions.width,
+                    pet_dimensions.height,
+                )))
+                .map_err(|err| err.to_string())?;
+        }
     }
     update_tray_menu(&app)?;
     let _ = app.emit("deskmon-settings-changed", ());
@@ -931,118 +932,146 @@ fn relocate_pet_to_activity_area(
         .map_err(|err| err.to_string())
 }
 
-fn start_timer_inner(
+#[tauri::command]
+fn focus_session_action(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    action: FocusSessionAction,
+) -> Result<FocusSessionSnapshot, String> {
+    perform_focus_session_action(&app, &state, action)
+}
+
+fn start_focus_round_inner(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
-    kind: TimerKind,
     minutes: u64,
-) -> Result<TimerSnapshot, String> {
-    validate_timer_minutes(minutes, "计时时长")?;
-    {
-        let timer = state.timer.lock().map_err(|_| "timer lock poisoned")?;
-        if timer.is_some() {
-            return Ok(timer_snapshot(state));
-        }
-    }
-
-    let focus_timer = state
+) -> Result<FocusSessionSnapshot, String> {
+    let preferences = state
         .settings
         .lock()
         .map_err(|_| "settings lock poisoned")?
         .focus_timer
         .clone();
-    let (finished_message, play_sound) = timer_completion_policy(kind, &focus_timer);
-    let duration_seconds = minutes * 60;
-    let ends_at_ms = now_ms() + duration_seconds * 1000;
-    let next_timer = TimerState {
-        kind,
-        duration_seconds,
-        ends_at_ms,
-        finished_message,
-        play_sound,
+    let config = FocusSessionConfig {
+        base_focus_minutes: minutes,
+        break_minutes: preferences.break_minutes,
+        focus_finished_message: preferences.focus_finished_message,
+        break_finished_message: preferences.break_finished_message,
+        break_sound_enabled: preferences.break_sound_enabled,
     };
-    {
-        let mut timer = state.timer.lock().map_err(|_| "timer lock poisoned")?;
-        *timer = Some(next_timer.clone());
+    let (changed, snapshot, segment_id) = {
+        let mut session = state
+            .focus_session
+            .lock()
+            .map_err(|_| "focus session lock poisoned")?;
+        let changed = session.start_round(config, now_ms());
+        (
+            changed,
+            session.snapshot(now_ms()),
+            session.active_segment_id(),
+        )
+    };
+    if changed {
+        publish_focus_session_change(app, state, &snapshot)?;
+        if let Some(segment_id) = segment_id {
+            spawn_focus_timer_worker(app.clone(), segment_id);
+        }
     }
-    update_tray_menu(app)?;
-    let snapshot = timer_snapshot(state);
-    update_timer_menu_text(app, &snapshot)?;
-    app.emit("deskmon-timer-changed", &snapshot)
-        .map_err(|err| err.to_string())?;
-    spawn_timer_worker(app.clone(), next_timer);
     Ok(snapshot)
 }
 
-fn timer_completion_policy(kind: TimerKind, focus_timer: &FocusTimerPreferences) -> (String, bool) {
-    match kind {
-        TimerKind::Focus => (focus_timer.focus_finished_message.clone(), false),
-        TimerKind::Break => (
-            focus_timer.break_finished_message.clone(),
-            focus_timer.break_sound_enabled,
-        ),
+fn perform_focus_session_action(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    action: FocusSessionAction,
+) -> Result<FocusSessionSnapshot, String> {
+    let (changed, snapshot, segment_id) = {
+        let mut session = state
+            .focus_session
+            .lock()
+            .map_err(|_| "focus session lock poisoned")?;
+        let previous_segment_id = session.active_segment_id();
+        let changed = session.apply_action(action, now_ms());
+        let segment_id = session
+            .active_segment_id()
+            .filter(|segment_id| Some(*segment_id) != previous_segment_id);
+        (changed, session.snapshot(now_ms()), segment_id)
+    };
+    if changed {
+        publish_focus_session_change(app, state, &snapshot)?;
+        if let Some(segment_id) = segment_id {
+            spawn_focus_timer_worker(app.clone(), segment_id);
+        }
     }
+    Ok(snapshot)
 }
 
-fn spawn_timer_worker(app: AppHandle, started_timer: TimerState) {
+fn publish_focus_session_change(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    snapshot: &FocusSessionSnapshot,
+) -> Result<(), String> {
+    clear_timer_menu_items(state);
+    update_tray_menu(app)?;
+    app.emit("deskmon-focus-session-changed", snapshot)
+        .map_err(|err| err.to_string())
+}
+
+fn spawn_focus_timer_worker(app: AppHandle, segment_id: u64) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
         let Some(state) = app.try_state::<AppState>() else {
             break;
         };
-        let current = {
-            let timer = match state.timer.lock() {
-                Ok(timer) => timer,
+        let snapshot = {
+            let session = match state.focus_session.lock() {
+                Ok(session) => session,
                 Err(_) => break,
             };
-            timer.clone()
+            if session.active_segment_id() != Some(segment_id) {
+                break;
+            }
+            session.snapshot(now_ms())
         };
 
-        if current.as_ref().map(|timer| timer.ends_at_ms) != Some(started_timer.ends_at_ms) {
-            break;
+        if snapshot.remaining_seconds > 0 {
+            let _ = update_timer_menu_text(&app, &snapshot);
+            let _ = app.emit("deskmon-focus-session-changed", &snapshot);
+            continue;
         }
 
-        let snapshot = timer_snapshot(&state);
-        let _ = update_timer_menu_text(&app, &snapshot);
-        let _ = app.emit("deskmon-timer-changed", &snapshot);
-
-        if snapshot.remaining_seconds == 0 {
-            let finished = {
-                let mut timer = match state.timer.lock() {
-                    Ok(timer) => timer,
-                    Err(_) => break,
-                };
-                if timer.as_ref().map(|timer| timer.ends_at_ms) == Some(started_timer.ends_at_ms) {
-                    *timer = None;
-                    true
-                } else {
-                    false
-                }
+        let (feedback, completed_snapshot) = {
+            let mut session = match state.focus_session.lock() {
+                Ok(session) => session,
+                Err(_) => break,
             };
-            if finished {
-                clear_timer_menu_items(&state);
-                let _ = update_tray_menu(&app);
-                let _ = show_timer_finished_notification(&app, &started_timer);
-                play_timer_finished_sound(&started_timer);
-                let _ = app.emit("deskmon-timer-finished", started_timer);
-                let _ = app.emit("deskmon-timer-changed", TimerSnapshot::idle());
-            }
-            break;
+            let feedback = session.complete_segment(segment_id);
+            (feedback, session.snapshot(now_ms()))
+        };
+        if let Some(feedback) = feedback {
+            let _ = publish_focus_session_change(&app, &state, &completed_snapshot);
+            let _ = show_timer_finished_notification(&app, &feedback);
+            play_timer_finished_sound(&feedback);
+            let _ = app.emit("deskmon-focus-segment-finished", feedback.kind);
         }
+        break;
     });
 }
 
-fn show_timer_finished_notification(app: &AppHandle, timer: &TimerState) -> Result<(), String> {
+fn show_timer_finished_notification(
+    app: &AppHandle,
+    feedback: &CompletionFeedback,
+) -> Result<(), String> {
     app.notification()
         .builder()
         .title("Deskmon")
-        .body(timer.finished_message.clone())
+        .body(feedback.message.clone())
         .show()
         .map_err(|err| err.to_string())
 }
 
-fn play_timer_finished_sound(timer: &TimerState) {
-    if !timer.play_sound {
+fn play_timer_finished_sound(feedback: &CompletionFeedback) {
+    if !feedback.play_sound {
         return;
     }
 
@@ -1310,7 +1339,7 @@ fn build_tray_menu(
         .lock()
         .map_err(|_| "settings lock poisoned")?
         .clone();
-    let timer = timer_snapshot(state);
+    let focus_session = focus_session_snapshot(state);
     let visibility_label = if settings.pet_visible {
         "隐藏宠物"
     } else {
@@ -1322,27 +1351,78 @@ fn build_tray_menu(
         "暂停移动"
     };
 
-    let mut builder = MenuBuilder::new(app)
-        .text("toggle_pet", visibility_label)
-        .text("toggle_pause", pause_label)
-        .text("relocate_pet", "移回活动区域");
-
-    if timer.is_running {
-        let status = MenuItem::with_id(
-            app,
-            TRAY_TIMER_STATUS_ID,
-            timer_status_label(&timer),
-            false,
-            None::<&str>,
-        )
-        .map_err(|err| err.to_string())?;
-        remember_tray_timer_status(state, Some(status.clone()))?;
-        builder = builder.item(&status).text("cancel_timer", "取消当前计时");
-    } else {
-        remember_tray_timer_status(state, None)?;
-        let submenu = build_timer_submenu(app, &settings.focus_timer)?;
-        builder = builder.item(&submenu);
+    let mut builder = MenuBuilder::new(app);
+    if !focus_session.phase.uses_central_presentation() {
+        builder = builder
+            .text("toggle_pet", visibility_label)
+            .text("toggle_pause", pause_label)
+            .text("relocate_pet", "移回活动区域");
     }
+
+    builder = match focus_session.phase {
+        FocusSessionPhase::Idle => {
+            remember_tray_timer_status(state, None)?;
+            builder.item(&build_focus_submenu(app, &settings.focus_timer)?)
+        }
+        FocusSessionPhase::FocusRunning | FocusSessionPhase::BreakRunning => {
+            let status = MenuItem::with_id(
+                app,
+                TRAY_TIMER_STATUS_ID,
+                timer_status_label(&focus_session),
+                false,
+                None::<&str>,
+            )
+            .map_err(|err| err.to_string())?;
+            remember_tray_timer_status(state, Some(status.clone()))?;
+            if focus_session.phase == FocusSessionPhase::FocusRunning {
+                builder.item(&status).text("focus_cancel_round", "取消本轮")
+            } else {
+                builder
+                    .item(&status)
+                    .text("focus_finish_break_early", "提前结束休息")
+                    .separator()
+                    .text("end_round_and_hide", "结束本轮并隐藏宠物")
+            }
+        }
+        FocusSessionPhase::FocusComplete => {
+            remember_tray_timer_status(state, None)?;
+            builder
+                .text(
+                    "focus_start_break",
+                    format!(
+                        "休息 {} 分钟",
+                        focus_session
+                            .break_minutes
+                            .unwrap_or(settings.focus_timer.break_minutes)
+                    ),
+                )
+                .text(
+                    "focus_extend_focus",
+                    format!("再专注 {EXTRA_SEGMENT_MINUTES} 分钟"),
+                )
+                .text("focus_end_round", "结束本轮")
+                .separator()
+                .text("end_round_and_hide", "结束本轮并隐藏宠物")
+        }
+        FocusSessionPhase::BreakComplete => {
+            remember_tray_timer_status(state, None)?;
+            builder
+                .text(
+                    "focus_resume",
+                    format!(
+                        "继续专注 {} 分钟",
+                        focus_session.base_focus_minutes.unwrap_or(25)
+                    ),
+                )
+                .text(
+                    "focus_extend_break",
+                    format!("再休息 {EXTRA_SEGMENT_MINUTES} 分钟"),
+                )
+                .text("focus_end_round", "结束本轮")
+                .separator()
+                .text("end_round_and_hide", "结束本轮并隐藏宠物")
+        }
+    };
 
     builder = builder
         .separator()
@@ -1363,7 +1443,7 @@ fn build_pet_menu(
         .lock()
         .map_err(|_| "settings lock poisoned")?
         .clone();
-    let timer = timer_snapshot(state);
+    let focus_session = focus_session_snapshot(state);
     let pause_label = if settings.movement_paused {
         "恢复移动"
     } else {
@@ -1372,36 +1452,87 @@ fn build_pet_menu(
 
     let mut builder = MenuBuilder::new(app);
 
-    if timer.is_running {
-        let status = MenuItem::with_id(
-            app,
-            PET_TIMER_STATUS_ID,
-            timer_status_label(&timer),
-            false,
-            None::<&str>,
-        )
-        .map_err(|err| err.to_string())?;
-        remember_pet_timer_status(state, Some(status.clone()))?;
-        builder = builder
-            .item(&status)
-            .text("cancel_timer", "取消当前计时")
-            .separator();
-    } else {
-        remember_pet_timer_status(state, None)?;
-        let submenu = build_timer_submenu(app, &settings.focus_timer)?;
-        builder = builder.item(&submenu).separator();
-    }
+    builder = match focus_session.phase {
+        FocusSessionPhase::Idle => {
+            remember_pet_timer_status(state, None)?;
+            builder
+                .item(&build_focus_submenu(app, &settings.focus_timer)?)
+                .separator()
+        }
+        FocusSessionPhase::FocusRunning | FocusSessionPhase::BreakRunning => {
+            let status = MenuItem::with_id(
+                app,
+                PET_TIMER_STATUS_ID,
+                timer_status_label(&focus_session),
+                false,
+                None::<&str>,
+            )
+            .map_err(|err| err.to_string())?;
+            remember_pet_timer_status(state, Some(status.clone()))?;
+            if focus_session.phase == FocusSessionPhase::FocusRunning {
+                builder
+                    .item(&status)
+                    .text("focus_cancel_round", "取消本轮")
+                    .separator()
+            } else {
+                builder
+                    .item(&status)
+                    .text("focus_finish_break_early", "提前结束休息")
+                    .text("end_round_and_hide", "结束本轮并隐藏宠物")
+                    .separator()
+            }
+        }
+        FocusSessionPhase::FocusComplete => {
+            remember_pet_timer_status(state, None)?;
+            builder
+                .text(
+                    "focus_start_break",
+                    format!(
+                        "休息 {} 分钟",
+                        focus_session
+                            .break_minutes
+                            .unwrap_or(settings.focus_timer.break_minutes)
+                    ),
+                )
+                .text(
+                    "focus_extend_focus",
+                    format!("再专注 {EXTRA_SEGMENT_MINUTES} 分钟"),
+                )
+                .text("focus_end_round", "结束本轮")
+                .text("end_round_and_hide", "结束本轮并隐藏宠物")
+                .separator()
+        }
+        FocusSessionPhase::BreakComplete => {
+            remember_pet_timer_status(state, None)?;
+            builder
+                .text(
+                    "focus_resume",
+                    format!(
+                        "继续专注 {} 分钟",
+                        focus_session.base_focus_minutes.unwrap_or(25)
+                    ),
+                )
+                .text(
+                    "focus_extend_break",
+                    format!("再休息 {EXTRA_SEGMENT_MINUTES} 分钟"),
+                )
+                .text("focus_end_round", "结束本轮")
+                .text("end_round_and_hide", "结束本轮并隐藏宠物")
+                .separator()
+        }
+    };
 
     let remember_submenu = build_remember_reset_submenu(app, state)?;
-    builder = builder
-        .item(&remember_submenu)
-        .separator()
-        .text("toggle_pause", pause_label)
-        .text("hide_pet", "隐藏");
+    builder = builder.item(&remember_submenu).separator();
+    if !focus_session.phase.uses_central_presentation() {
+        builder = builder
+            .text("toggle_pause", pause_label)
+            .text("hide_pet", "隐藏");
+    }
     builder.build().map_err(|err| err.to_string())
 }
 
-fn build_timer_submenu(
+fn build_focus_submenu(
     app: &AppHandle,
     focus_timer: &FocusTimerPreferences,
 ) -> Result<Submenu<tauri::Wry>, String> {
@@ -1412,13 +1543,7 @@ fn build_timer_submenu(
             format!("专注 {minutes} 分钟"),
         );
     }
-    builder
-        .text(
-            "start_break_timer",
-            format!("休息 {} 分钟", focus_timer.break_minutes),
-        )
-        .build()
-        .map_err(|err| err.to_string())
+    builder.build().map_err(|err| err.to_string())
 }
 
 fn build_remember_reset_submenu(
@@ -1500,15 +1625,15 @@ fn build_remember_variable_submenu(
     builder.build().map_err(|err| err.to_string())
 }
 
-fn timer_status_label(timer: &TimerSnapshot) -> String {
-    let label = match timer.kind {
+fn timer_status_label(focus_session: &FocusSessionSnapshot) -> String {
+    let label = match focus_session.kind {
         Some(TimerKind::Focus) => "专注中",
         Some(TimerKind::Break) => "休息中",
         None => "计时中",
     };
     format!(
         "{label}：还剩 {}",
-        format_remaining(timer.remaining_seconds)
+        format_remaining(focus_session.remaining_seconds)
     )
 }
 
@@ -1543,7 +1668,10 @@ fn clear_timer_menu_items(state: &tauri::State<'_, AppState>) {
     }
 }
 
-fn update_timer_menu_text(app: &AppHandle, timer: &TimerSnapshot) -> Result<(), String> {
+fn update_timer_menu_text(
+    app: &AppHandle,
+    focus_session: &FocusSessionSnapshot,
+) -> Result<(), String> {
     let Some(state) = app.try_state::<AppState>() else {
         return Ok(());
     };
@@ -1557,7 +1685,7 @@ fn update_timer_menu_text(app: &AppHandle, timer: &TimerSnapshot) -> Result<(), 
             items.pet_timer_status.clone(),
         )
     };
-    let label = timer_status_label(timer);
+    let label = timer_status_label(focus_session);
     if let Some(item) = tray_item {
         item.set_text(&label).map_err(|err| err.to_string())?;
     }
@@ -1597,7 +1725,7 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
                 .ok()
                 .and_then(|settings| settings.focus_timer.focus_minutes.get(index).copied());
             if let Some(minutes) = minutes {
-                let _ = start_timer_inner(app, &state, TimerKind::Focus, minutes);
+                let _ = start_focus_round_inner(app, &state, minutes);
             }
         }
         return;
@@ -1644,22 +1772,30 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         "quit" => {
             app.exit(0);
         }
-        "cancel_timer" => {
-            if let Ok(mut timer) = state.timer.lock() {
-                *timer = None;
-            }
-            clear_timer_menu_items(&state);
-            let _ = update_tray_menu(app);
-            let snapshot = timer_snapshot(&state);
-            let _ = app.emit("deskmon-timer-changed", &snapshot);
+        "focus_cancel_round" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::CancelRound);
         }
-        "start_break_timer" => {
-            let minutes = state
-                .settings
-                .lock()
-                .map(|settings| settings.focus_timer.break_minutes)
-                .unwrap_or(5);
-            let _ = start_timer_inner(app, &state, TimerKind::Break, minutes);
+        "focus_start_break" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::StartBreak);
+        }
+        "focus_extend_focus" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ExtendFocus);
+        }
+        "focus_finish_break_early" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::FinishBreakEarly);
+        }
+        "focus_resume" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ResumeFocus);
+        }
+        "focus_extend_break" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ExtendBreak);
+        }
+        "focus_end_round" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::EndRound);
+        }
+        "end_round_and_hide" => {
+            let _ = perform_focus_session_action(app, &state, FocusSessionAction::EndRound);
+            let _ = set_pet_visible_inner(app, &state, false);
         }
         _ => {}
     }
@@ -1694,22 +1830,12 @@ fn move_pet_window_to(app: &AppHandle, position: Point) -> Result<(), String> {
     Ok(())
 }
 
-fn timer_snapshot(state: &tauri::State<'_, AppState>) -> TimerSnapshot {
-    let timer = match state.timer.lock() {
-        Ok(timer) => timer.clone(),
-        Err(_) => None,
-    };
-    timer.map_or_else(TimerSnapshot::idle, |timer| {
-        let now = now_ms();
-        let remaining_ms = timer.ends_at_ms.saturating_sub(now);
-        TimerSnapshot {
-            is_running: remaining_ms > 0,
-            kind: Some(timer.kind),
-            duration_seconds: timer.duration_seconds,
-            remaining_seconds: remaining_ms.div_ceil(1000),
-            ends_at_ms: Some(timer.ends_at_ms),
-        }
-    })
+fn focus_session_snapshot(state: &tauri::State<'_, AppState>) -> FocusSessionSnapshot {
+    state
+        .focus_session
+        .lock()
+        .map(|session| session.snapshot(now_ms()))
+        .unwrap_or_else(|_| FocusSession::default().snapshot(now_ms()))
 }
 
 fn format_remaining(seconds: u64) -> String {
@@ -1723,46 +1849,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn timer_completion_policy_uses_kind_specific_message_and_sound() {
-        let preferences = FocusTimerPreferences {
-            focus_finished_message: "回头休息".into(),
-            break_finished_message: "回来继续".into(),
-            break_sound_enabled: true,
-            ..FocusTimerPreferences::default()
-        };
-
-        let focus = timer_completion_policy(TimerKind::Focus, &preferences);
-        assert_eq!(focus, ("回头休息".into(), false));
-
-        let break_timer = timer_completion_policy(TimerKind::Break, &preferences);
-        assert_eq!(break_timer, ("回来继续".into(), true));
-    }
-
-    #[test]
-    fn timer_status_label_matches_focus_and_break_modes() {
-        let focus = TimerSnapshot {
-            is_running: true,
-            kind: Some(TimerKind::Focus),
-            duration_seconds: 1500,
-            remaining_seconds: 754,
-            ends_at_ms: Some(1),
-        };
-        assert_eq!(timer_status_label(&focus), "专注中：还剩 12:34");
-
-        let break_timer = TimerSnapshot {
-            kind: Some(TimerKind::Break),
-            remaining_seconds: 62,
-            ..focus
-        };
-        assert_eq!(timer_status_label(&break_timer), "休息中：还剩 01:02");
-    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1802,11 +1888,13 @@ pub fn run() {
             get_bootstrap,
             get_desktop_snapshot,
             get_pet_window_frame,
+            get_focus_presentation_context,
             move_pet_window,
             set_pet_temporary_presentation,
             persist_pet_position,
             save_user_preferences,
             show_pet_menu,
+            focus_session_action,
             get_remember_snapshot,
             open_remember,
             remember_reset_clipboard,
@@ -1825,4 +1913,32 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timer_status_label_matches_focus_and_break_modes() {
+        let focus = FocusSessionSnapshot {
+            phase: FocusSessionPhase::FocusRunning,
+            is_running: true,
+            kind: Some(TimerKind::Focus),
+            duration_seconds: 1500,
+            remaining_seconds: 754,
+            ends_at_ms: Some(1),
+            base_focus_minutes: Some(25),
+            break_minutes: Some(5),
+        };
+        assert_eq!(timer_status_label(&focus), "专注中：还剩 12:34");
+
+        let break_timer = FocusSessionSnapshot {
+            phase: FocusSessionPhase::BreakRunning,
+            kind: Some(TimerKind::Break),
+            remaining_seconds: 62,
+            ..focus
+        };
+        assert_eq!(timer_status_label(&break_timer), "休息中：还剩 01:02");
+    }
 }

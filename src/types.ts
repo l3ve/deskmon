@@ -1,6 +1,20 @@
 export type PetSize = "small" | "medium" | "large";
 export type ActivityLevel = "quiet" | "standard" | "lively";
 export type TimerKind = "focus" | "break";
+export type FocusSessionPhase =
+  | "idle"
+  | "focusRunning"
+  | "focusComplete"
+  | "breakRunning"
+  | "breakComplete";
+export type FocusSessionAction =
+  | "cancelRound"
+  | "startBreak"
+  | "extendFocus"
+  | "finishBreakEarly"
+  | "resumeFocus"
+  | "extendBreak"
+  | "endRound";
 
 export interface Point {
   x: number;
@@ -49,12 +63,15 @@ export interface MonitorPayload {
   scaleFactor: number;
 }
 
-export interface TimerSnapshot {
+export interface FocusSessionSnapshot {
+  phase: FocusSessionPhase;
   isRunning: boolean;
   kind: TimerKind | null;
   durationSeconds: number;
   remainingSeconds: number;
   endsAtMs: number | null;
+  baseFocusMinutes: number | null;
+  breakMinutes: number | null;
 }
 
 export interface BootstrapPayload {
@@ -65,12 +82,17 @@ export interface BootstrapPayload {
   petDimensions: Dimensions;
   petWindowDimensions: Dimensions;
   petPosition: Point;
-  timer: TimerSnapshot;
+  focusSession: FocusSessionSnapshot;
 }
 
 export interface WindowFramePayload {
   position: Point;
   size: Dimensions;
+  cursor: Point;
+}
+
+export interface FocusPresentationContext {
+  monitors: MonitorPayload[];
   cursor: Point;
 }
 

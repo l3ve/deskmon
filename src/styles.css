@@ -44,6 +44,9 @@ button {
 }
 
 #pet-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
   display: block;
   cursor: grab;
   image-rendering: pixelated;
@@ -52,6 +55,167 @@ button {
 
 #pet-canvas:active {
   cursor: grabbing;
+}
+
+.pet-root.flow-presenting #pet-canvas,
+.pet-root.flow-presenting #pet-canvas:active {
+  cursor: default;
+}
+
+.focus-dialog {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 264px;
+  height: 248px;
+  padding: 17px;
+  overflow: visible;
+  border: 1px solid rgba(117, 128, 121, 0.34);
+  border-radius: 8px;
+  color: #1f2d25;
+  background: rgba(252, 253, 251, 0.97);
+  box-shadow:
+    0 18px 46px rgba(20, 27, 23, 0.2),
+    0 2px 8px rgba(20, 27, 23, 0.1);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.focus-dialog[hidden] {
+  display: none;
+}
+
+.focus-dialog::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -7px;
+  width: 12px;
+  height: 12px;
+  border-bottom: 1px solid rgba(117, 128, 121, 0.34);
+  border-left: 1px solid rgba(117, 128, 121, 0.34);
+  background: rgba(252, 253, 251, 0.97);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.focus-dialog[data-placement="left"]::before {
+  right: -7px;
+  left: auto;
+  border: 0;
+  border-top: 1px solid rgba(117, 128, 121, 0.34);
+  border-right: 1px solid rgba(117, 128, 121, 0.34);
+}
+
+.focus-dialog[data-placement="below"]::before {
+  top: -7px;
+  left: 50%;
+  border: 0;
+  border-top: 1px solid rgba(117, 128, 121, 0.34);
+  border-left: 1px solid rgba(117, 128, 121, 0.34);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.focus-dialog-eyebrow {
+  margin: 0 0 5px;
+  color: #75618f;
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+.focus-dialog h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 780;
+  line-height: 1.25;
+}
+
+.focus-dialog-message {
+  margin: 5px 0 0;
+  color: #667169;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.focus-dialog-countdown {
+  display: block;
+  margin: 12px 0 0;
+  color: #1f5139;
+  font-variant-numeric: tabular-nums;
+  font-size: 34px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.focus-dialog-countdown[hidden] {
+  display: none;
+}
+
+.focus-dialog-actions {
+  display: grid;
+  gap: 7px;
+  margin-top: auto;
+}
+
+.focus-dialog-button {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: 0;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.focus-dialog-button.primary {
+  color: #ffffff;
+  background: #2f8b5d;
+}
+
+.focus-dialog-button.primary:hover {
+  background: #27784f;
+}
+
+.focus-dialog-button.secondary {
+  border-color: #d7ddd7;
+  color: #2d3b33;
+  background: #f2f5f1;
+}
+
+.focus-dialog-button.secondary:hover {
+  border-color: #c8d2ca;
+  background: #e9eee9;
+}
+
+.focus-dialog-button.quiet {
+  color: #8e4141;
+  background: transparent;
+}
+
+.focus-dialog-button.quiet:hover {
+  background: #f8eeee;
+}
+
+.focus-dialog:focus-visible,
+.focus-dialog-button:focus-visible {
+  outline: 2px solid rgba(47, 139, 93, 0.42);
+  outline-offset: 2px;
+}
+
+.focus-dialog.busy {
+  cursor: progress;
+}
+
+.focus-dialog-button:disabled {
+  cursor: progress;
+  opacity: 0.62;
 }
 
 .settings-root {
@@ -1293,6 +1457,47 @@ button {
 }
 
 @media (prefers-color-scheme: dark) {
+  .focus-dialog {
+    border-color: rgba(132, 149, 138, 0.42);
+    color: #e6eee8;
+    background: rgba(29, 36, 31, 0.98);
+    box-shadow:
+      0 18px 46px rgba(0, 0, 0, 0.38),
+      0 2px 8px rgba(0, 0, 0, 0.22);
+  }
+
+  .focus-dialog::before {
+    border-color: rgba(132, 149, 138, 0.42);
+    background: rgba(29, 36, 31, 0.98);
+  }
+
+  .focus-dialog-message {
+    color: #aab8af;
+  }
+
+  .focus-dialog-countdown {
+    color: #8cd1aa;
+  }
+
+  .focus-dialog-button.secondary {
+    border-color: #3a473f;
+    color: #dde7e0;
+    background: #252e28;
+  }
+
+  .focus-dialog-button.secondary:hover {
+    border-color: #4b5c51;
+    background: #2d3831;
+  }
+
+  .focus-dialog-button.quiet {
+    color: #e1a0a0;
+  }
+
+  .focus-dialog-button.quiet:hover {
+    background: #3b2929;
+  }
+
   .settings-root,
   .remember-root {
     color: #e6eee8;
