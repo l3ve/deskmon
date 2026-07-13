@@ -36,6 +36,7 @@ export interface TemporaryPetPresentation {
   position: Point;
   dimensions: Dimensions;
   alwaysOnTop: boolean;
+  visible: boolean;
 }
 
 interface CreateGiantCelebrationInput {
@@ -46,11 +47,13 @@ interface CreateGiantCelebrationInput {
   monitors: MonitorPayload[];
   activityArea: Rect;
   coordinateScale: number;
+  targetPoint?: Point;
+  centerInWorkArea?: boolean;
 }
 
-const giantCelebrationEnterMs = 3000;
-const giantCelebrationHoldMs = 3000;
-const giantCelebrationRestoreMs = 1000;
+export const giantCelebrationEnterMs = 3000;
+export const giantCelebrationHoldMs = 3000;
+export const giantCelebrationRestoreMs = 1000;
 const giantCelebrationMinPhysicalSize = 320;
 const giantCelebrationMaxPhysicalSize = 560;
 
@@ -66,11 +69,13 @@ export function createGiantCelebration({
   monitors,
   activityArea,
   coordinateScale,
+  targetPoint,
+  centerInWorkArea = false,
 }: CreateGiantCelebrationInput): GiantCelebrationState | null {
   const normalPetDimensions = { ...petDimensions };
   const normalWindowDimensions = { ...petWindowDimensions };
   const normalCenter = centerOf(position, normalWindowDimensions);
-  const monitor = monitorForPoint(normalCenter, monitors) ?? monitors[0];
+  const monitor = monitorForPoint(targetPoint ?? normalCenter, monitors) ?? monitors[0];
   const workArea = monitor?.workArea ?? activityArea;
   const scaleFactor = monitor?.scaleFactor ?? coordinateScale;
   const physicalLimit = Math.max(1, Math.min(workArea.width, workArea.height));
@@ -103,7 +108,7 @@ export function createGiantCelebration({
         x: workArea.x + workArea.width * 0.5 - targetWindowDimensions.width * 0.5,
         y:
           workArea.y +
-          workArea.height * lerp(0.58, 0.52, sizeProgress) -
+          workArea.height * (centerInWorkArea ? 0.5 : lerp(0.58, 0.52, sizeProgress)) -
           targetWindowDimensions.height * 0.5,
       },
       workArea,
@@ -185,7 +190,9 @@ export function getGiantRestoreTarget(
   alwaysOnTop: boolean,
 ): GiantPresentationFrame {
   const workArea =
-    monitorForPoint(celebration.normalCenter, monitors)?.workArea ?? activityArea;
+    monitorForPoint(celebration.normalCenter, monitors)?.workArea ??
+    monitors[0]?.workArea ??
+    activityArea;
   const position = clampPointToRect(
     topLeftFromCenter(celebration.normalCenter, celebration.restoreWindowDimensions),
     workArea,

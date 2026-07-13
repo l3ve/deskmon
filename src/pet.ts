@@ -15,12 +15,20 @@ import {
   createGiantCelebration,
   getGiantPresentationFrame,
   getGiantRestoreTarget,
-  giantCelebrationTotalMs,
+  giantCelebrationEnterMs,
+  giantCelebrationHoldMs,
+  giantCelebrationRestoreMs,
   giantPresentationSyncIntervalMs,
   type GiantCelebrationState,
   type GiantPresentationFrame,
   type TemporaryPetPresentation,
 } from "./pet/giantCelebration";
+import { createFocusDialog, type FocusDialogController } from "./pet/focusDialog";
+import {
+  createFocusPresentationLayout,
+  presentationMonitorIsAvailable,
+  type FocusPresentationLayout,
+} from "./pet/focusPresentation";
 import {
   activityProfiles,
   chooseRestMood,
@@ -31,11 +39,14 @@ import { spriteSlimeSkin, type PetFacing, type PetMood, type PetSkin } from "./p
 import type {
   BootstrapPayload,
   Dimensions,
+  FocusPresentationContext,
+  FocusSessionAction,
+  FocusSessionSnapshot,
   MonitorPayload,
   Point,
   Rect,
   Settings,
-  TimerSnapshot,
+  TimerKind,
   WindowFramePayload,
 } from "./types";
 
@@ -56,9 +67,11 @@ export function mountPet(root: HTMLElement): void {
   canvas.ariaLabel = "Deskmon";
   root.append(canvas);
 
-  const app = new PetController(canvas);
+  const app = new PetController(root, canvas);
   app.start();
 }
+
+type FlowPresentationMode = "entering" | "holding" | "restoring";
 
 class PetController {
   private activityArea: Rect = { x: 0, y: 0, width: 800, height: 500 };
@@ -67,8 +80,17 @@ class PetController {
   private lastFrameTime = performance.now();
   private lastHoverFrameCheck = 0;
   private lastWindowSync = 0;
+  private lastPresentationMonitorCheck = 0;
   private facing: PetFacing = "right";
   private giantCelebration: GiantCelebrationState | null = null;
+  private flowPresentationMode: FlowPresentationMode | null = null;
+  private flowPresentationLayout: FocusPresentationLayout | null = null;
+  private flowRestoreStartedAt = 0;
+  private focusDialog: FocusDialogController;
+  private focusPresentationContextInFlight = false;
+  private pendingFocusPresentation = false;
+  private presentationRequestId = 0;
+  private completionCelebrateUntil = 0;
   private mood: PetMood = "idle";
   private monitors: MonitorPayload[] = [];
   private moveInFlight = false;
@@ -86,16 +108,23 @@ class PetController {
   private skin: PetSkin = spriteSlimeSkin;
   private target: Point | null = null;
   private temporaryPresentationInFlight = false;
-  private timer: TimerSnapshot = {
+  private focusSession: FocusSessionSnapshot = {
+    phase: "idle",
     isRunning: false,
     kind: null,
     durationSeconds: 0,
     remainingSeconds: 0,
     endsAtMs: null,
+    baseFocusMinutes: null,
+    breakMinutes: null,
   };
-  private celebrateUntil = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(
+    private readonly root: HTMLElement,
+    private readonly canvas: HTMLCanvasElement,
+  ) {
+    this.focusDialog = createFocusDialog((action) => this.performFocusSessionAction(action));
+    this.root.append(this.focusDialog.element);
     this.canvas.addEventListener("pointerenter", () => {
       this.pointerOverPet = true;
     });
@@ -108,7 +137,7 @@ class PetController {
     this.canvas.addEventListener("pointercancel", () => this.finishDrag());
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      if (this.giantCelebration) {
+      if (this.flowPresentationMode === "restoring") {
         return;
       }
       void invoke("show_pet_menu");
@@ -132,35 +161,29 @@ class PetController {
         this.settings.movementPaused = event.payload;
       }
     });
-    void listen<TimerSnapshot>("deskmon-timer-changed", (event) => {
-      this.timer = event.payload;
-      if (event.payload.isRunning && this.giantCelebration) {
-        this.finishGiantCelebration();
-        this.mood = "timer-waiting";
-      }
+    void listen<FocusSessionSnapshot>("deskmon-focus-session-changed", (event) => {
+      const previous = this.focusSession;
+      this.focusSession = event.payload;
+      this.syncFocusSession(previous);
     });
-    void listen("deskmon-timer-finished", () => {
-      this.timer = {
-        isRunning: false,
-        kind: null,
-        durationSeconds: 0,
-        remainingSeconds: 0,
-        endsAtMs: null,
-      };
-      this.handleTimerFinished(performance.now());
+    void listen<TimerKind>("deskmon-focus-segment-finished", (event) => {
+      if (event.payload === "break" && this.flowPresentationMode === "holding") {
+        this.completionCelebrateUntil = performance.now() + 1800;
+        this.mood = "celebrate";
+      }
     });
     void listen<boolean>("deskmon-visibility-changed", (event) => {
       if (this.settings) {
         this.settings.petVisible = event.payload;
       }
-      if (!event.payload && this.giantCelebration) {
-        this.finishGiantCelebration();
+      if (!event.payload && this.flowPresentationMode) {
+        this.finishFlowPresentation(true);
       }
     });
     void listen("deskmon-settings-changed", async () => {
       const bootstrap = await invoke<BootstrapPayload>("get_desktop_snapshot");
       this.applyBootstrap(bootstrap);
-      if (!this.giantCelebration) {
+      if (!this.flowPresentationMode) {
         this.resizeCanvas();
         this.pickTarget();
       }
@@ -171,8 +194,8 @@ class PetController {
     this.settings = bootstrap.settings;
     this.monitors = bootstrap.monitors;
     this.activityArea = bootstrap.activityArea;
-    this.timer = bootstrap.timer;
-    if (this.giantCelebration) {
+    this.focusSession = bootstrap.focusSession;
+    if (this.flowPresentationMode && this.giantCelebration) {
       this.giantCelebration.restorePetDimensions = bootstrap.petDimensions;
       this.giantCelebration.restoreWindowDimensions = bootstrap.petWindowDimensions;
       return;
@@ -186,6 +209,9 @@ class PetController {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.style.width = `${this.petDimensions.width}px`;
     this.canvas.style.height = `${this.petDimensions.height}px`;
+    const petOffset = this.flowPresentationLayout?.petOffset ?? { x: 0, y: 0 };
+    this.canvas.style.left = `${petOffset.x}px`;
+    this.canvas.style.top = `${petOffset.y}px`;
     const width = Math.max(1, Math.round(this.petDimensions.width * dpr));
     const height = Math.max(1, Math.round(this.petDimensions.height * dpr));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -208,8 +234,8 @@ class PetController {
       return;
     }
 
-    if (this.giantCelebration) {
-      this.updateGiantCelebration(time);
+    if (this.flowPresentationMode) {
+      this.updateFlowPresentation(time);
       return;
     }
 
@@ -218,12 +244,7 @@ class PetController {
       return;
     }
 
-    if (time < this.celebrateUntil) {
-      this.mood = "celebrate";
-      return;
-    }
-
-    if (this.timer.isRunning) {
+    if (this.focusSession.isRunning) {
       this.mood = "timer-waiting";
     }
 
@@ -232,19 +253,19 @@ class PetController {
     }
 
     if (this.pointerOverPet) {
-      this.mood = this.timer.isRunning ? "timer-waiting" : "idle";
+      this.mood = this.focusSession.isRunning ? "timer-waiting" : "idle";
       return;
     }
 
     if (settings.movementPaused) {
-      if (!this.timer.isRunning && time > this.restUntil + petCadence.pausedSleepDelayMs) {
+      if (!this.focusSession.isRunning && time > this.restUntil + petCadence.pausedSleepDelayMs) {
         this.mood = "sleep";
       }
       return;
     }
 
     if (time < this.restUntil) {
-      this.mood = this.timer.isRunning ? "timer-waiting" : this.restMood;
+      this.mood = this.focusSession.isRunning ? "timer-waiting" : this.restMood;
       return;
     }
 
@@ -255,7 +276,7 @@ class PetController {
       this.requestWindowMove(this.position, true);
       this.restUntil = time + randomBetween(profile.restMs[0], profile.restMs[1]);
       this.restMood = chooseRestMood(profile);
-      this.mood = this.timer.isRunning ? "timer-waiting" : this.restMood;
+      this.mood = this.focusSession.isRunning ? "timer-waiting" : this.restMood;
       this.pickTarget();
       return;
     }
@@ -265,7 +286,11 @@ class PetController {
     const next = moveTowards(this.position, this.target, speed * dtSeconds);
     this.updateFacing(next.x - this.position.x);
     this.position = clampPointToRect(next, this.activityArea, this.petWindowDimensions);
-    this.mood = this.timer.isRunning ? "timer-waiting" : this.isMovingFast ? "run" : "walk";
+    this.mood = this.focusSession.isRunning
+      ? "timer-waiting"
+      : this.isMovingFast
+        ? "run"
+        : "walk";
     this.syncWindowPosition(time);
   }
 
@@ -379,53 +404,143 @@ class PetController {
       });
   }
 
-  private handleTimerFinished(time: number): void {
-    if (this.settings?.petVisible === false || this.drag?.active) {
-      this.celebrateUntil = 0;
+  private syncFocusSession(previous: FocusSessionSnapshot): void {
+    const previousUsedCentralPresentation = [
+      "focusComplete",
+      "breakRunning",
+      "breakComplete",
+    ].includes(previous.phase);
+    if (
+      this.focusSession.phase === "focusComplete" ||
+      this.focusSession.phase === "breakRunning" ||
+      this.focusSession.phase === "breakComplete"
+    ) {
+      if (!this.flowPresentationMode) {
+        this.beginFocusPresentation();
+      } else if (this.flowPresentationMode === "holding") {
+        this.focusDialog.render(this.focusSession);
+      }
       return;
     }
 
-    const celebration = createGiantCelebration({
-      startedAt: time,
-      petDimensions: this.petDimensions,
-      petWindowDimensions: this.petWindowDimensions,
-      position: this.position,
-      monitors: this.monitors,
-      activityArea: this.activityArea,
-      coordinateScale: this.coordinateScale(),
-    });
-    if (!celebration) {
-      this.celebrateUntil = time + 5200;
+    this.focusDialog.hide();
+    this.pendingFocusPresentation = false;
+    if (this.flowPresentationMode) {
+      if (
+        previousUsedCentralPresentation &&
+        this.flowPresentationMode !== "restoring"
+      ) {
+        this.beginFlowRestore();
+      }
       return;
     }
-
-    this.celebrateUntil = 0;
-    this.giantCelebration = celebration;
-    this.pointerOverPet = false;
-    this.target = null;
-    this.mood = "celebrate";
-    this.updateGiantCelebration(time, true);
+    this.presentationRequestId += 1;
+    this.mood = this.focusSession.isRunning ? "timer-waiting" : "idle";
   }
 
-  private updateGiantCelebration(time: number, forceSync = false): void {
+  private beginFocusPresentation(): void {
+    if (this.drag?.active) {
+      this.pendingFocusPresentation = true;
+      return;
+    }
+    if (this.flowPresentationMode || this.focusPresentationContextInFlight) {
+      return;
+    }
+
+    this.focusPresentationContextInFlight = true;
+    const requestId = ++this.presentationRequestId;
+    invoke<FocusPresentationContext>("get_focus_presentation_context")
+      .then((context) => {
+        if (
+          requestId !== this.presentationRequestId ||
+          ![
+            "focusComplete",
+            "breakRunning",
+            "breakComplete",
+          ].includes(this.focusSession.phase)
+        ) {
+          return;
+        }
+        this.monitors = context.monitors;
+        const time = performance.now();
+        const celebration = createGiantCelebration({
+          startedAt: time,
+          petDimensions: this.petDimensions,
+          petWindowDimensions: this.petWindowDimensions,
+          position: this.position,
+          monitors: this.monitors,
+          activityArea: this.activityArea,
+          coordinateScale: this.coordinateScale(),
+          targetPoint: context.cursor,
+          centerInWorkArea: true,
+        });
+        if (!celebration) {
+          return;
+        }
+
+        this.giantCelebration = celebration;
+        this.flowPresentationMode = "entering";
+        this.flowPresentationLayout = null;
+        this.pendingFocusPresentation = false;
+        this.pointerOverPet = false;
+        this.target = null;
+        this.focusDialog.hide();
+        this.root.classList.add("flow-presenting", "flow-entering");
+        this.mood = "celebrate";
+        this.updateFlowPresentation(time, true);
+      })
+      .catch(() => {
+        // The session remains pending and the synchronized menu is still usable.
+      })
+      .finally(() => {
+        this.focusPresentationContextInFlight = false;
+      });
+  }
+
+  private updateFlowPresentation(time: number, forceSync = false): void {
     const celebration = this.giantCelebration;
-    if (!celebration) {
+    const mode = this.flowPresentationMode;
+    if (!celebration || !mode) {
       return;
     }
 
-    const elapsed = time - celebration.startedAt;
-    if (elapsed >= giantCelebrationTotalMs) {
-      this.finishGiantCelebration();
+    if (mode === "entering") {
+      const elapsed = time - celebration.startedAt;
+      if (elapsed >= giantCelebrationEnterMs) {
+        this.holdFlowPresentation();
+        return;
+      }
+      const frame = getGiantPresentationFrame(
+        celebration,
+        elapsed,
+        this.getGiantRestoreTarget(celebration),
+      );
+      this.applySquarePresentationFrame(frame, time, forceSync);
+      this.mood = "celebrate";
       return;
     }
 
-    const frame = getGiantPresentationFrame(
-      celebration,
-      elapsed,
-      this.getGiantRestoreTarget(celebration),
-    );
-    this.applyGiantPresentationFrame(frame, time, forceSync);
-    this.mood = "celebrate";
+    if (mode === "restoring") {
+      const elapsed = time - this.flowRestoreStartedAt;
+      if (elapsed >= giantCelebrationRestoreMs) {
+        this.finishFlowPresentation();
+        return;
+      }
+      const frame = getGiantPresentationFrame(
+        celebration,
+        giantCelebrationEnterMs + giantCelebrationHoldMs + elapsed,
+        this.getGiantRestoreTarget(celebration),
+      );
+      this.applySquarePresentationFrame(frame, time, forceSync);
+      return;
+    }
+
+    this.reconcilePresentationMonitor(time);
+    if (this.focusSession.phase === "breakRunning") {
+      this.mood = "timer-waiting";
+    } else {
+      this.mood = time < this.completionCelebrateUntil ? "celebrate" : "idle";
+    }
   }
 
   private getGiantRestoreTarget(celebration: GiantCelebrationState): GiantPresentationFrame {
@@ -437,12 +552,13 @@ class PetController {
     );
   }
 
-  private applyGiantPresentationFrame(
+  private applySquarePresentationFrame(
     frame: GiantPresentationFrame,
     time: number,
     forceSync = false,
   ): void {
     const position = topLeftFromCenter(frame.center, frame.windowDimensions);
+    this.flowPresentationLayout = null;
     this.petDimensions = frame.petDimensions;
     this.petWindowDimensions = frame.windowDimensions;
     this.position = position;
@@ -461,22 +577,100 @@ class PetController {
       position,
       dimensions: frame.petDimensions,
       alwaysOnTop: frame.alwaysOnTop,
+      visible: true,
     });
   }
 
-  private finishGiantCelebration(): void {
+  private holdFlowPresentation(): void {
     const celebration = this.giantCelebration;
+    if (!celebration) {
+      return;
+    }
+
+    const layout = createFocusPresentationLayout(
+      celebration,
+      this.monitors,
+      this.activityArea,
+    );
+    this.flowPresentationMode = "holding";
+    this.flowPresentationLayout = layout;
+    this.root.classList.remove("flow-entering");
+    this.root.classList.add("flow-holding");
+    this.petDimensions = { ...layout.petDimensions };
+    this.petWindowDimensions = { ...celebration.targetWindowDimensions };
+    this.position = topLeftFromCenter(
+      celebration.targetCenter,
+      celebration.targetWindowDimensions,
+    );
+    this.resizeCanvas();
+    const dialogStyle = this.focusDialog.element.style;
+    dialogStyle.left = `${layout.dialogOffset.x}px`;
+    dialogStyle.top = `${layout.dialogOffset.y}px`;
+    dialogStyle.width = `${layout.dialogDimensions.width}px`;
+    dialogStyle.height = `${layout.dialogDimensions.height}px`;
+    this.focusDialog.element.dataset.placement = layout.dialogPlacement;
+    this.focusDialog.render(this.focusSession);
+    this.requestTemporaryPetPresentation({
+      position: layout.windowPosition,
+      dimensions: layout.windowLogicalDimensions,
+      alwaysOnTop: true,
+      visible: true,
+    });
+  }
+
+  private beginFlowRestore(): void {
+    const celebration = this.giantCelebration;
+    if (!celebration) {
+      this.finishFlowPresentation();
+      return;
+    }
+    this.focusDialog.hide();
+    this.root.classList.remove("flow-holding");
+    this.flowPresentationLayout = null;
+    this.pendingFocusPresentation = false;
+
+    if (this.settings?.petVisible === false || this.flowPresentationMode === "entering") {
+      this.finishFlowPresentation(this.settings?.petVisible === false);
+      return;
+    }
+
+    this.flowPresentationMode = "restoring";
+    this.flowRestoreStartedAt = performance.now();
+    this.petDimensions = { ...celebration.targetPetDimensions };
+    this.petWindowDimensions = { ...celebration.targetWindowDimensions };
+    this.position = topLeftFromCenter(
+      celebration.targetCenter,
+      celebration.targetWindowDimensions,
+    );
+    this.resizeCanvas();
+    this.requestTemporaryPetPresentation({
+      position: this.position,
+      dimensions: celebration.targetPetDimensions,
+      alwaysOnTop: true,
+      visible: true,
+    });
+  }
+
+  private finishFlowPresentation(forceHidden = false): void {
+    const celebration = this.giantCelebration;
+    this.presentationRequestId += 1;
+    this.focusDialog.hide();
+    this.root.classList.remove("flow-presenting", "flow-entering", "flow-holding");
+    this.flowPresentationMode = null;
+    this.flowPresentationLayout = null;
+    this.giantCelebration = null;
+    this.pendingFocusPresentation = false;
+    this.completionCelebrateUntil = 0;
     if (!celebration) {
       return;
     }
 
     const restoreTarget = this.getGiantRestoreTarget(celebration);
     const position = topLeftFromCenter(restoreTarget.center, restoreTarget.windowDimensions);
-    this.giantCelebration = null;
     this.petDimensions = restoreTarget.petDimensions;
     this.petWindowDimensions = restoreTarget.windowDimensions;
     this.position = position;
-    this.mood = this.timer.isRunning ? "timer-waiting" : "idle";
+    this.mood = this.focusSession.isRunning ? "timer-waiting" : "idle";
     this.restMood = "idle";
     this.restUntil = performance.now() + petCadence.postCelebrationRestMs;
     this.resizeCanvas();
@@ -484,8 +678,61 @@ class PetController {
       position,
       dimensions: restoreTarget.petDimensions,
       alwaysOnTop: restoreTarget.alwaysOnTop,
+      visible: !forceHidden && (this.settings?.petVisible ?? true),
     });
     this.pickTarget();
+  }
+
+  private reconcilePresentationMonitor(time: number): void {
+    if (
+      this.focusPresentationContextInFlight ||
+      time - this.lastPresentationMonitorCheck < 2000
+    ) {
+      return;
+    }
+    this.lastPresentationMonitorCheck = time;
+    this.focusPresentationContextInFlight = true;
+    invoke<FocusPresentationContext>("get_focus_presentation_context")
+      .then((context) => {
+        const celebration = this.giantCelebration;
+        if (!celebration || this.flowPresentationMode !== "holding") {
+          return;
+        }
+        this.monitors = context.monitors;
+        if (presentationMonitorIsAvailable(celebration, context.monitors)) {
+          return;
+        }
+        const retargeted = createGiantCelebration({
+          startedAt: performance.now() - giantCelebrationEnterMs,
+          petDimensions: celebration.normalPetDimensions,
+          petWindowDimensions: celebration.normalWindowDimensions,
+          position: topLeftFromCenter(
+            celebration.normalCenter,
+            celebration.normalWindowDimensions,
+          ),
+          monitors: context.monitors,
+          activityArea: this.activityArea,
+          coordinateScale:
+            celebration.normalWindowDimensions.width /
+            Math.max(1, celebration.normalPetDimensions.width),
+          targetPoint: context.cursor,
+          centerInWorkArea: true,
+        });
+        if (!retargeted) {
+          return;
+        }
+        retargeted.restorePetDimensions = celebration.restorePetDimensions;
+        retargeted.restoreWindowDimensions = celebration.restoreWindowDimensions;
+        this.giantCelebration = retargeted;
+        this.holdFlowPresentation();
+      })
+      .finally(() => {
+        this.focusPresentationContextInFlight = false;
+      });
+  }
+
+  private async performFocusSessionAction(action: FocusSessionAction): Promise<void> {
+    await invoke<FocusSessionSnapshot>("focus_session_action", { action });
   }
 
   private requestTemporaryPetPresentation(presentation: TemporaryPetPresentation): void {
@@ -507,6 +754,7 @@ class PetController {
       width: presentation.dimensions.width,
       height: presentation.dimensions.height,
       alwaysOnTop: presentation.alwaysOnTop,
+      visible: presentation.visible,
     })
       .catch(() => {
         // A transient native presentation failure should not break the pet loop.
@@ -524,7 +772,7 @@ class PetController {
       return;
     }
     event.preventDefault();
-    if (this.giantCelebration) {
+    if (this.flowPresentationMode) {
       return;
     }
     this.canvas.setPointerCapture(event.pointerId);
@@ -555,7 +803,7 @@ class PetController {
   }
 
   private onPointerMove(event: PointerEvent): void {
-    if (this.giantCelebration) {
+    if (this.flowPresentationMode) {
       return;
     }
     if (!this.drag || this.drag.pointerId !== event.pointerId) {
@@ -584,7 +832,7 @@ class PetController {
   }
 
   private onPointerUp(event: PointerEvent): void {
-    if (this.giantCelebration) {
+    if (this.flowPresentationMode) {
       this.finishDrag();
       return;
     }
@@ -603,6 +851,7 @@ class PetController {
   }
 
   private finishDrag(): void {
+    const shouldBeginPresentation = this.pendingFocusPresentation;
     if (this.drag) {
       try {
         this.canvas.releasePointerCapture(this.drag.pointerId);
@@ -611,6 +860,10 @@ class PetController {
       }
     }
     this.drag = null;
+    if (shouldBeginPresentation) {
+      this.pendingFocusPresentation = false;
+      this.beginFocusPresentation();
+    }
   }
 
   private draw(time: number): void {
