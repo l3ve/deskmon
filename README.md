@@ -115,3 +115,7 @@ npm run build
 ```bash
 npm run tauri -- build
 ```
+
+## 许可
+
+Deskmon 使用 [MIT License](LICENSE) 发布。

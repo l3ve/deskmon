@@ -31,9 +31,11 @@
 - `docs/designs/remember-variable-library-ui-flow.png`: “记忆力”变量库完整交互状态预览图。
 - `docs/designs/remember-variable-library-ui.md`: “记忆力”变量库 UI 信息架构和交互状态说明。
 - `docs/qa/v1-smoke-checklist.md`: V1 发布前手工 smoke test 清单。
+- `LICENSE`: 仓库级 MIT License 全文，版权声明为 `Copyright (c) 2026 L3've`。
 
 ## Important Decisions
 
+- Deskmon 整体使用 MIT License 发布；Node 与 Rust 包元数据统一使用 SPDX 标识 `MIT`。
 - 左键单击宠物不触发操作；右键打开宠物小菜单。
 - 鼠标悬停在宠物上时，自主移动暂停，但动画和计时器继续。
 - 悬停暂停不能只依赖 `pointerleave`；需要用原生 cursor/window frame 定期校准，避免丢事件后卡 idle。
