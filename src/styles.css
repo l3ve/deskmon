@@ -412,6 +412,33 @@ button {
   flex: 0 0 auto;
 }
 
+.screenshot-panel {
+  flex: 0 0 auto;
+}
+
+.screenshot-directory-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.screenshot-directory-path {
+  overflow: hidden;
+  max-width: min(330px, 42vw);
+  color: #65746b;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.screenshot-directory-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .timer-field-row {
   align-items: center;
 }
@@ -551,6 +578,15 @@ button {
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
+}
+
+.ghost-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.ghost-button:disabled:hover {
+  background: #ffffff;
 }
 
 .segmented button.selected {
@@ -1571,6 +1607,10 @@ button {
     color: #a7b7ad;
   }
 
+  .screenshot-directory-path {
+    color: #a7b7ad;
+  }
+
   .remember-filter-button:hover,
   .segmented button:hover,
   .ghost-button:hover,
@@ -1606,6 +1646,11 @@ button {
   .remember-row-action {
     border-color: #3b4a40;
     color: #dfe9e2;
+    background: #202821;
+  }
+
+
+  .ghost-button:disabled:hover {
     background: #202821;
   }
 
@@ -1698,6 +1743,19 @@ button {
 
   .settings-textarea {
     width: 100%;
+  }
+
+  .screenshot-directory-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .screenshot-directory-path {
+    max-width: 100%;
+  }
+
+  .screenshot-directory-actions .ghost-button {
+    flex: 1;
   }
 
   .segmented,

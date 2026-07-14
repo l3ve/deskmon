@@ -1,6 +1,7 @@
 mod focus_session;
 mod geometry;
 mod remember;
+mod screenshot;
 mod settings;
 
 use focus_session::{
@@ -12,14 +13,16 @@ use geometry::{
     normalize_activity_area, pet_physical_dimensions, point_visible, Dimensions, MonitorPayload,
     Point, Rect,
 };
+use screenshot::{CaptureOutcome, ScreenshotCoordinator};
 use serde::Serialize;
 use settings::{
-    load_settings, normalize_focus_timer_preferences, save_settings, FocusTimerPreferences,
-    Settings, UserPreferences,
+    load_settings, normalize_focus_timer_preferences, normalize_screenshot_preferences,
+    save_settings, FocusTimerPreferences, ScreenshotPreferences, Settings, UserPreferences,
 };
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::{
+    path::{Path, PathBuf},
     sync::Mutex,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -31,7 +34,9 @@ use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
 };
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_dialog::{
+    DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
+};
 use tauri_plugin_notification::NotificationExt;
 
 const PET_WINDOW: &str = "pet";
@@ -62,6 +67,7 @@ struct BootstrapPayload {
     pet_window_dimensions: Dimensions,
     pet_position: Point,
     focus_session: FocusSessionSnapshot,
+    screenshot_directory: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,6 +92,7 @@ struct AppState {
     remember: Mutex<remember::RememberState>,
     menu_items: Mutex<MenuItems>,
     last_position_saved_at_ms: Mutex<u64>,
+    screenshot: ScreenshotCoordinator,
 }
 
 #[derive(Default)]
@@ -119,6 +126,7 @@ fn get_bootstrap(
         .filter(|point| point_visible(*point, pet_window_dimensions, &monitors))
         .unwrap_or_else(|| initial_pet_position(activity_area, pet_window_dimensions));
     settings.last_position = Some(position);
+    let screenshot_directory = effective_screenshot_directory(&app, &settings)?;
     let settings_snapshot = settings.clone();
     drop(settings);
 
@@ -137,6 +145,7 @@ fn get_bootstrap(
         pet_window_dimensions,
         pet_position: position,
         focus_session,
+        screenshot_directory: screenshot_directory.to_string_lossy().into_owned(),
     })
 }
 
@@ -298,6 +307,7 @@ fn save_user_preferences(
         settings.activity_level = preferences.activity_level;
         settings.always_on_top = preferences.always_on_top;
         settings.focus_timer = normalize_focus_timer_preferences(preferences.focus_timer)?;
+        settings.screenshot = normalize_screenshot_preferences(preferences.screenshot);
         settings.custom_activity_area = normalized_area;
         save_settings(&app, &settings)?;
     }
@@ -425,6 +435,186 @@ fn show_pet_menu(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<()
         .get_webview_window(PET_WINDOW)
         .ok_or("pet window is not available")?;
     window.popup_menu(&menu).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn choose_screenshot_directory(app: AppHandle) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = pick_screenshot_directory(&app)? else {
+            return Ok(None);
+        };
+        screenshot::ensure_save_directory(&path)?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn effective_screenshot_directory(app: &AppHandle, settings: &Settings) -> Result<PathBuf, String> {
+    settings
+        .screenshot
+        .save_directory
+        .as_ref()
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| app.path().desktop_dir().map_err(|error| error.to_string()))
+}
+
+fn pick_screenshot_directory(app: &AppHandle) -> Result<Option<PathBuf>, String> {
+    app.dialog()
+        .file()
+        .set_title("选择截图保存文件夹")
+        .blocking_pick_folder()
+        .map(|path| path.into_path().map_err(|error| error.to_string()))
+        .transpose()
+}
+
+fn update_screenshot_directory(app: &AppHandle, directory: Option<&Path>) -> Result<(), String> {
+    let state = app
+        .try_state::<AppState>()
+        .ok_or("app state is not available")?;
+    let mut settings = state
+        .settings
+        .lock()
+        .map_err(|_| "settings lock poisoned")?;
+    settings.screenshot = ScreenshotPreferences {
+        save_directory: directory.map(|path| path.to_string_lossy().into_owned()),
+    };
+    save_settings(app, &settings)?;
+    drop(settings);
+    let _ = app.emit("deskmon-settings-changed", ());
+    Ok(())
+}
+
+fn start_region_screenshot(app: &AppHandle, state: &tauri::State<'_, AppState>) {
+    let Some(task_guard) = state.screenshot.try_begin() else {
+        return;
+    };
+    let app = app.clone();
+    thread::spawn(move || {
+        let _task_guard = task_guard;
+        run_region_screenshot(&app);
+    });
+}
+
+fn run_region_screenshot(app: &AppHandle) {
+    let Some(directory) = prepare_screenshot_directory(app) else {
+        return;
+    };
+    let output_path = screenshot::next_screenshot_path(&directory);
+
+    match screenshot::capture_region(&output_path) {
+        CaptureOutcome::Saved => {
+            let filename = output_path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "PNG 图片".into());
+            let _ = app
+                .notification()
+                .builder()
+                .title("区域截图已保存")
+                .body(filename)
+                .show();
+        }
+        CaptureOutcome::Canceled => {}
+        CaptureOutcome::Failed {
+            message,
+            permission_denied,
+        } => {
+            if permission_denied {
+                show_screenshot_permission_prompt(app);
+            } else {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("区域截图保存失败")
+                    .body(message)
+                    .show();
+            }
+        }
+    }
+}
+
+fn prepare_screenshot_directory(app: &AppHandle) -> Option<PathBuf> {
+    loop {
+        let state = app.try_state::<AppState>()?;
+        let settings = state.settings.lock().ok()?.clone();
+        let directory = match effective_screenshot_directory(app, &settings) {
+            Ok(directory) => directory,
+            Err(error) => {
+                show_screenshot_failure_notification(app, &error);
+                return None;
+            }
+        };
+
+        match screenshot::ensure_save_directory(&directory) {
+            Ok(()) => return Some(directory),
+            Err(error) => {
+                let result = app
+                    .dialog()
+                    .message(error)
+                    .title("截图目录不可用")
+                    .kind(MessageDialogKind::Error)
+                    .buttons(MessageDialogButtons::YesNoCancelCustom(
+                        "重新选择目录".into(),
+                        "恢复桌面".into(),
+                        "取消".into(),
+                    ))
+                    .blocking_show_with_result();
+                match result {
+                    MessageDialogResult::Custom(label) if label == "重新选择目录" => {
+                        let selected = match pick_screenshot_directory(app) {
+                            Ok(selected) => selected,
+                            Err(error) => {
+                                show_screenshot_failure_notification(app, &error);
+                                return None;
+                            }
+                        };
+                        let selected = selected?;
+                        if let Err(error) = update_screenshot_directory(app, Some(&selected)) {
+                            show_screenshot_failure_notification(app, &error);
+                            return None;
+                        }
+                    }
+                    MessageDialogResult::Custom(label) if label == "恢复桌面" => {
+                        if let Err(error) = update_screenshot_directory(app, None) {
+                            show_screenshot_failure_notification(app, &error);
+                            return None;
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+        }
+    }
+}
+
+fn show_screenshot_permission_prompt(app: &AppHandle) {
+    let result = app
+        .dialog()
+        .message("Deskmon 需要屏幕录制权限才能进行区域截图。")
+        .title("需要屏幕录制权限")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "打开系统设置".into(),
+            "取消".into(),
+        ))
+        .blocking_show_with_result();
+    if matches!(result, MessageDialogResult::Custom(label) if label == "打开系统设置") {
+        #[cfg(target_os = "macos")]
+        let _ = Command::new("/usr/bin/open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+}
+
+fn show_screenshot_failure_notification(app: &AppHandle, message: &str) {
+    let _ = app
+        .notification()
+        .builder()
+        .title("区域截图失败")
+        .body(message)
+        .show();
 }
 
 #[tauri::command]
@@ -1426,6 +1616,8 @@ fn build_tray_menu(
 
     builder = builder
         .separator()
+        .text("region_screenshot", "区域截图")
+        .separator()
         .text("open_remember", "记忆力")
         .text("remember_save_current_clipboard", "记住刚想到的")
         .separator()
@@ -1522,6 +1714,7 @@ fn build_pet_menu(
         }
     };
 
+    builder = builder.text("region_screenshot", "区域截图").separator();
     let remember_submenu = build_remember_reset_submenu(app, state)?;
     builder = builder.item(&remember_submenu).separator();
     if !focus_session.phase.uses_central_presentation() {
@@ -1769,6 +1962,9 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         "remember_save_current_clipboard" => {
             remember_save_current_clipboard(app, &state);
         }
+        "region_screenshot" => {
+            start_region_screenshot(app, &state);
+        }
         "quit" => {
             app.exit(0);
         }
@@ -1893,6 +2089,7 @@ pub fn run() {
             set_pet_temporary_presentation,
             persist_pet_position,
             save_user_preferences,
+            choose_screenshot_directory,
             show_pet_menu,
             focus_session_action,
             get_remember_snapshot,
