@@ -75,6 +75,7 @@ class SettingsController {
       this.summaryItem("活跃", activityLabels[settings.activityLevel]),
       this.summaryItem("置顶", settings.alwaysOnTop ? "开启" : "关闭"),
       this.summaryItem("计时", this.focusTimerSummary(settings.focusTimer)),
+      this.summaryItem("截图", settings.screenshot.saveDirectory ? "自定义" : "桌面"),
       this.summaryItem("区域", this.customArea ? formatDimensions(this.customArea) : "默认"),
     );
 
@@ -103,6 +104,7 @@ class SettingsController {
     controls.append(fields);
 
     const focusTimerPanel = this.focusTimerPanel(settings.focusTimer);
+    const screenshotPanel = this.screenshotPanel();
 
     const areaPanel = element("section", "settings-panel area-panel");
     const areaHeader = element("div", "panel-header");
@@ -124,7 +126,7 @@ class SettingsController {
     areaPanel.append(areaHeader, canvasWrap, this.status);
 
     const content = element("main", "settings-content");
-    content.append(controls, focusTimerPanel, areaPanel);
+    content.append(controls, focusTimerPanel, screenshotPanel, areaPanel);
 
     const workspace = element("div", "settings-workspace");
     workspace.append(sidebar, content);
@@ -222,6 +224,46 @@ class SettingsController {
 
     panel.append(header, fields);
     return panel;
+  }
+
+  private screenshotPanel(): HTMLElement {
+    const panel = element("section", "settings-panel screenshot-panel");
+    const header = element("div", "panel-header");
+    header.append(element("h2", "", "区域截图"));
+
+    const fields = element("div", "settings-fields");
+    const field = element("div", "field-row screenshot-directory-row");
+    field.append(element("span", "field-label", "保存到"));
+
+    const directoryControl = element("div", "screenshot-directory-control");
+    const path = element("span", "screenshot-directory-path", this.bootstrap?.screenshotDirectory ?? "");
+    path.title = path.textContent ?? "";
+
+    const actions = element("div", "screenshot-directory-actions");
+    const chooseButton = element("button", "ghost-button", "选择文件夹");
+    chooseButton.addEventListener("click", () => void this.chooseScreenshotDirectory());
+    const resetButton = element("button", "ghost-button", "恢复默认") as HTMLButtonElement;
+    resetButton.disabled = !this.bootstrap?.settings.screenshot.saveDirectory;
+    resetButton.addEventListener("click", () => {
+      this.save({ screenshot: { saveDirectory: null } });
+    });
+    actions.append(chooseButton, resetButton);
+    directoryControl.append(path, actions);
+    field.append(directoryControl);
+    fields.append(field);
+    panel.append(header, fields);
+    return panel;
+  }
+
+  private async chooseScreenshotDirectory(): Promise<void> {
+    try {
+      const directory = await invoke<string | null>("choose_screenshot_directory");
+      if (directory) {
+        this.save({ screenshot: { saveDirectory: directory } });
+      }
+    } catch (error) {
+      this.setStatus(String(error), "error");
+    }
   }
 
   private numberField(
@@ -353,6 +395,7 @@ class SettingsController {
       activityLevel: settings.activityLevel,
       alwaysOnTop: settings.alwaysOnTop,
       focusTimer: cloneFocusTimer(settings.focusTimer),
+      screenshot: { ...settings.screenshot },
       customActivityArea: this.customArea,
     };
     const preferences: UserPreferences = {
@@ -362,6 +405,7 @@ class SettingsController {
       focusTimer: patch.focusTimer
         ? cloneFocusTimer(patch.focusTimer)
         : cloneFocusTimer(current.focusTimer),
+      screenshot: patch.screenshot ? { ...patch.screenshot } : { ...current.screenshot },
       customActivityArea:
         patch.customActivityArea === undefined ? current.customActivityArea : patch.customActivityArea,
     };

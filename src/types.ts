@@ -33,10 +33,15 @@ export interface Settings {
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
   focusTimer: FocusTimerPreferences;
+  screenshot: ScreenshotPreferences;
   petVisible: boolean;
   movementPaused: boolean;
   customActivityArea: Rect | null;
   lastPosition: Point | null;
+}
+
+export interface ScreenshotPreferences {
+  saveDirectory: string | null;
 }
 
 export interface FocusTimerPreferences {
@@ -52,6 +57,7 @@ export interface UserPreferences {
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
   focusTimer: FocusTimerPreferences;
+  screenshot: ScreenshotPreferences;
   customActivityArea: Rect | null;
 }
 
@@ -83,6 +89,7 @@ export interface BootstrapPayload {
   petWindowDimensions: Dimensions;
   petPosition: Point;
   focusSession: FocusSessionSnapshot;
+  screenshotDirectory: string;
 }
 
 export interface WindowFramePayload {

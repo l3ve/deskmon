@@ -62,6 +62,13 @@ pub(crate) struct FocusTimerPreferences {
     pub(crate) break_sound_enabled: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScreenshotPreferences {
+    #[serde(default)]
+    pub(crate) save_directory: Option<String>,
+}
+
 impl Default for FocusTimerPreferences {
     fn default() -> Self {
         Self {
@@ -82,6 +89,8 @@ pub(crate) struct Settings {
     pub(crate) always_on_top: bool,
     #[serde(default)]
     pub(crate) focus_timer: FocusTimerPreferences,
+    #[serde(default)]
+    pub(crate) screenshot: ScreenshotPreferences,
     pub(crate) pet_visible: bool,
     pub(crate) movement_paused: bool,
     pub(crate) custom_activity_area: Option<Rect>,
@@ -95,6 +104,7 @@ impl Default for Settings {
             activity_level: ActivityLevel::Standard,
             always_on_top: true,
             focus_timer: FocusTimerPreferences::default(),
+            screenshot: ScreenshotPreferences::default(),
             pet_visible: true,
             movement_paused: false,
             custom_activity_area: None,
@@ -110,6 +120,7 @@ pub(crate) struct UserPreferences {
     pub(crate) activity_level: ActivityLevel,
     pub(crate) always_on_top: bool,
     pub(crate) focus_timer: FocusTimerPreferences,
+    pub(crate) screenshot: ScreenshotPreferences,
     pub(crate) custom_activity_area: Option<Rect>,
 }
 
@@ -123,7 +134,19 @@ pub(crate) fn load_settings(app: &AppHandle) -> Settings {
         .unwrap_or_default();
     settings.focus_timer =
         normalize_focus_timer_preferences(settings.focus_timer).unwrap_or_default();
+    settings.screenshot = normalize_screenshot_preferences(settings.screenshot);
     settings
+}
+
+pub(crate) fn normalize_screenshot_preferences(
+    preferences: ScreenshotPreferences,
+) -> ScreenshotPreferences {
+    ScreenshotPreferences {
+        save_directory: preferences
+            .save_directory
+            .map(|path| path.trim().to_string())
+            .filter(|path| !path.is_empty()),
+    }
 }
 
 pub(crate) fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
@@ -220,6 +243,44 @@ mod tests {
         assert_eq!(preferences.focus_finished_message, "专注结束，休息一下吧");
         assert_eq!(preferences.break_finished_message, "休息结束，回来继续吧");
         assert!(preferences.break_sound_enabled);
+    }
+
+    #[test]
+    fn screenshot_preferences_default_to_desktop_and_normalize_empty_paths() {
+        assert_eq!(ScreenshotPreferences::default().save_directory, None);
+        assert_eq!(
+            normalize_screenshot_preferences(ScreenshotPreferences {
+                save_directory: Some("   ".into()),
+            })
+            .save_directory,
+            None
+        );
+        assert_eq!(
+            normalize_screenshot_preferences(ScreenshotPreferences {
+                save_directory: Some(" /tmp/captures ".into()),
+            })
+            .save_directory
+            .as_deref(),
+            Some("/tmp/captures")
+        );
+    }
+
+    #[test]
+    fn legacy_settings_without_screenshot_preferences_still_load() {
+        let legacy = serde_json::json!({
+            "petSize": "medium",
+            "activityLevel": "standard",
+            "alwaysOnTop": true,
+            "focusTimer": FocusTimerPreferences::default(),
+            "petVisible": true,
+            "movementPaused": false,
+            "customActivityArea": null,
+            "lastPosition": null
+        });
+
+        let settings: Settings =
+            serde_json::from_value(legacy).expect("legacy settings should load");
+        assert_eq!(settings.screenshot, ScreenshotPreferences::default());
     }
 
     #[test]

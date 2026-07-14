@@ -13,6 +13,7 @@
 - `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态、Tauri command 和应用编排。
 - `src-tauri/src/focus_session.rs`: 当前一轮的五状态流程、计时段、动作转换、完成反馈和纯逻辑测试。
 - `src-tauri/src/geometry.rs`: 后端屏幕、活动区域、宠物物理尺寸和可见工作区 clamp 逻辑。
+- `src-tauri/src/screenshot.rs`: 区域截图任务锁、目录检查、英文时间文件名、重名避让、原生执行和结果分类。
 - `src-tauri/src/settings.rs`: 用户偏好类型、默认值、逻辑尺寸映射和 settings.json 读写。
 - `src-tauri/assets/tray-icon.png`: macOS 菜单栏专用 template 图标，编译进 Rust，不放进 `src-tauri/icons`。
 - `src-tauri/src/remember.rs`: “记忆力”状态、文本规范化、笔记本加密/解密和核心规则测试。
@@ -23,6 +24,7 @@
 - `docs/prds/004-timer-finished-giant-celebration.md`: 倒计时结束时巨型庆祝提醒/巨型庆祝动效的触发、分段、尺寸、恢复和测试边界。
 - `docs/prds/005-desktop-pet-animation-polish.md`: 桌宠动画节奏优化 PRD，限定为不新增能力、不改素材，只打磨现有 7 个状态的播放和移动观感。
 - `docs/prds/006-lightweight-focus-timer.md`: 轻量专注计时器 PRD，覆盖专注/休息计时、自定义快捷时长、完成文案和休息结束系统声音边界。
+- `docs/prds/007-macos-region-screenshot.md`: macOS 区域截图 PRD，覆盖原生矩形框选、PNG 文件直存、保存目录设置、权限与失败反馈边界。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -120,6 +122,14 @@
 - 设置窗口默认内尺寸为 920x720，用于容纳桌宠行为、专注计时和活动区域；设置页摘要只在 700px 以下切到顶部堆叠。
 - 设置页右侧内容区必须是纵向可滚动列表，不能用固定三段 grid 轨道压缩卡片；活动区域只作为列表项提供有限 canvas 高度。
 - 设置页分钟控件不要依赖原生 `input type="number"` 的 spinner；WebView 中连点会选中文本并和保存重渲染冲突，使用自定义紧凑步进控件，避免散落的加减号按钮。
+- 区域截图仅由用户主动触发，入口是菜单栏和宠物右键菜单的一级“区域截图”，第一版不做自动截图、全局快捷键或跨平台实现。
+- 区域截图复用 macOS 原生矩形框选，固定输出 PNG，不包含鼠标，保留系统截图声音，也不允许切换整窗截图。
+- 截图期间不隐藏、暂停、移动或修改任何 Deskmon 窗口、宠物动画和专注流程；用户框选到 Deskmon 时允许它出现在图片中。
+- 截图默认保存到系统桌面，可在设置中选择自定义目录或恢复默认；目录不存在时自动创建，文件名使用 `Deskmon_YYYY-MM-DD_HH-mm-ss.png` 并以序号规避覆盖。
+- 截图不写剪贴板、不进入“记忆力”、不做预览或历史；成功通知文件名，取消保持安静，权限或保存失败走原生提示/系统通知。
+- 区域截图原生执行固定使用 `/usr/sbin/screencapture -i -s -t png`，放在线程中等待框选，不能阻塞 Tauri 主事件循环。
+- 截图自定义目录用可选字符串持久化；`None` 始终表示动态解析系统桌面，不能把当前用户桌面绝对路径写成默认值。
+- 截图任务锁是 `ScreenshotCoordinator` 的运行期原子状态，成功、取消和失败都依靠 guard 释放，重复请求静默忽略。
 - MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。
 
 ## Known Issues
