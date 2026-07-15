@@ -13,8 +13,8 @@ use geometry::{
     normalize_activity_area, pet_physical_dimensions, point_visible, Dimensions, MonitorPayload,
     Point, Rect,
 };
-use screenshot::{CaptureOutcome, ScreenshotCoordinator};
-use serde::Serialize;
+use screenshot::ScreenshotCoordinator;
+use serde::{Deserialize, Serialize};
 use settings::{
     load_settings, normalize_focus_timer_preferences, normalize_screenshot_preferences,
     save_settings, FocusTimerPreferences, ScreenshotPreferences, Settings, UserPreferences,
@@ -31,8 +31,8 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuBuilder, MenuItem, Submenu, SubmenuBuilder},
     tray::TrayIconBuilder,
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, Position, Size, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Position, Size,
+    WebviewUrl, WebviewWindow, WebviewWindowBuilder,
 };
 use tauri_plugin_dialog::{
     DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult,
@@ -42,6 +42,7 @@ use tauri_plugin_notification::NotificationExt;
 const PET_WINDOW: &str = "pet";
 const SETTINGS_WINDOW: &str = "settings";
 const REMEMBER_WINDOW: &str = "remember";
+const SCREENSHOT_WINDOW_PREFIX: &str = "screenshot-";
 const REMEMBER_WINDOW_WIDTH: f64 = 920.0;
 const REMEMBER_WINDOW_HEIGHT: f64 = 620.0;
 const REMEMBER_WINDOW_MIN_WIDTH: f64 = 780.0;
@@ -83,6 +84,42 @@ struct WindowFramePayload {
 struct FocusPresentationContext {
     monitors: Vec<MonitorPayload>,
     cursor: Point,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotCapturePayload {
+    data_url: String,
+    pixel_width: u32,
+    pixel_height: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotEditingPayload {
+    owner_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotSavePayload {
+    filename: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotSaveError {
+    message: String,
+    directory_unavailable: bool,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotSelectionRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 
 #[derive(Default)]
@@ -487,106 +524,281 @@ fn update_screenshot_directory(app: &AppHandle, directory: Option<&Path>) -> Res
 }
 
 fn start_region_screenshot(app: &AppHandle, state: &tauri::State<'_, AppState>) {
-    let Some(task_guard) = state.screenshot.try_begin() else {
+    if !screenshot::screen_capture_access_granted() {
+        show_screenshot_permission_prompt(app);
         return;
-    };
-    let app = app.clone();
-    thread::spawn(move || {
-        let _task_guard = task_guard;
-        run_region_screenshot(&app);
+    }
+    if !state.screenshot.try_begin() {
+        return;
+    }
+    if let Err(error) = create_screenshot_windows(app) {
+        eprintln!("failed to create screenshot overlays: {error}");
+        state.screenshot.finish();
+        close_screenshot_windows(app);
+        show_screenshot_failure_notification(app, &error);
+    }
+}
+
+fn create_screenshot_windows(app: &AppHandle) -> Result<(), String> {
+    let monitors = app
+        .available_monitors()
+        .map_err(|error| error.to_string())?;
+    if monitors.is_empty() {
+        return Err("没有可用于截图的显示器".into());
+    }
+    let cursor = app.cursor_position().ok();
+    let focus_index = cursor.and_then(|cursor| {
+        monitors.iter().position(|monitor| {
+            let position = monitor.position();
+            let size = monitor.size();
+            cursor.x >= position.x as f64
+                && cursor.x < (position.x as f64 + size.width as f64)
+                && cursor.y >= position.y as f64
+                && cursor.y < (position.y as f64 + size.height as f64)
+        })
     });
+
+    for (index, monitor) in monitors.iter().enumerate() {
+        let label = format!("{SCREENSHOT_WINDOW_PREFIX}{index}");
+        let position = monitor.position();
+        let size = monitor.size();
+        let scale_factor = monitor.scale_factor();
+        let logical_width = size.width as f64 / scale_factor;
+        let logical_height = size.height as f64 / scale_factor;
+        let window = WebviewWindowBuilder::new(
+            app,
+            &label,
+            WebviewUrl::App(format!("index.html#screenshot?monitor={index}").into()),
+        )
+        .title("Deskmon 截图")
+        .inner_size(logical_width, logical_height)
+        .transparent(true)
+        .decorations(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .shadow(false)
+        .focused(false)
+        .accept_first_mouse(true)
+        .content_protected(true)
+        .visible(false)
+        .build()
+        .map_err(|error| error.to_string())?;
+        window
+            .set_position(Position::Physical(PhysicalPosition::new(
+                position.x, position.y,
+            )))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_size(Size::Physical(PhysicalSize::new(size.width, size.height)))
+            .map_err(|error| error.to_string())?;
+        window.show().map_err(|error| error.to_string())?;
+    }
+
+    let focus_label = format!(
+        "{SCREENSHOT_WINDOW_PREFIX}{}",
+        focus_index.unwrap_or_default()
+    );
+    if let Some(window) = app.get_webview_window(&focus_label) {
+        let _ = window.set_focus();
+    }
+    Ok(())
 }
 
-fn run_region_screenshot(app: &AppHandle) {
-    let Some(directory) = prepare_screenshot_directory(app) else {
-        return;
+fn close_screenshot_windows(app: &AppHandle) {
+    for (label, window) in app.webview_windows() {
+        if label.starts_with(SCREENSHOT_WINDOW_PREFIX) {
+            let _ = window.close();
+        }
+    }
+}
+
+fn finish_screenshot_task(app: &AppHandle, coordinator: &ScreenshotCoordinator) {
+    coordinator.finish();
+    close_screenshot_windows(app);
+}
+
+#[tauri::command]
+fn screenshot_claim_selection(window_label: String, state: tauri::State<'_, AppState>) -> bool {
+    window_label.starts_with(SCREENSHOT_WINDOW_PREFIX)
+        && state.screenshot.claim_selection(&window_label)
+}
+
+#[tauri::command]
+fn screenshot_release_selection(window_label: String, state: tauri::State<'_, AppState>) {
+    state.screenshot.release_selection(&window_label);
+}
+
+#[tauri::command]
+fn cancel_screenshot_task(app: AppHandle, state: tauri::State<'_, AppState>) {
+    finish_screenshot_task(&app, &state.screenshot);
+}
+
+#[tauri::command]
+async fn capture_screenshot_selection(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    window_label: String,
+    rect: ScreenshotSelectionRect,
+) -> Result<ScreenshotCapturePayload, String> {
+    let coordinator = state.screenshot.clone();
+    if !coordinator.is_owner(&window_label) {
+        return Err("截图选区已失效".into());
+    }
+    let window = app
+        .get_webview_window(&window_label)
+        .ok_or_else(|| "截图窗口已关闭".to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let scale_factor = window.scale_factor().map_err(|error| error.to_string())?;
+    let region = screenshot::logical_capture_region(
+        position.x,
+        position.y,
+        scale_factor,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+    )?;
+    let cache_directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| error.to_string())?;
+    let event_payload = ScreenshotEditingPayload {
+        owner_label: window_label.clone(),
     };
-    let output_path = screenshot::next_screenshot_path(&directory);
+    let _ = app.emit("deskmon-screenshot-capturing", &event_payload);
 
-    match screenshot::capture_region(&output_path) {
-        CaptureOutcome::Saved => {
-            let filename = output_path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "PNG 图片".into());
-            let _ = app
-                .notification()
-                .builder()
-                .title("区域截图已保存")
-                .body(filename)
-                .show();
+    let captured = tauri::async_runtime::spawn_blocking(move || {
+        screenshot::capture_region(&cache_directory, region)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+
+    match captured {
+        Ok(captured) => {
+            coordinator.mark_captured(&window_label, captured.captured_at.clone())?;
+            let payload = ScreenshotCapturePayload {
+                data_url: captured.data_url(),
+                pixel_width: captured.pixel_width,
+                pixel_height: captured.pixel_height,
+            };
+            let _ = app.emit("deskmon-screenshot-editing", event_payload);
+            Ok(payload)
         }
-        CaptureOutcome::Canceled => {}
-        CaptureOutcome::Failed {
-            message,
-            permission_denied,
-        } => {
-            if permission_denied {
-                show_screenshot_permission_prompt(app);
+        Err(error) => {
+            eprintln!("failed to capture screenshot selection: {}", error.message);
+            finish_screenshot_task(&app, &coordinator);
+            if !screenshot::screen_capture_access_granted() {
+                show_screenshot_permission_prompt(&app);
             } else {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("区域截图保存失败")
-                    .body(message)
-                    .show();
+                show_screenshot_failure_notification(&app, &error.message);
             }
+            Err(error.message)
         }
     }
 }
 
-fn prepare_screenshot_directory(app: &AppHandle) -> Option<PathBuf> {
-    loop {
-        let state = app.try_state::<AppState>()?;
-        let settings = state.settings.lock().ok()?.clone();
-        let directory = match effective_screenshot_directory(app, &settings) {
-            Ok(directory) => directory,
-            Err(error) => {
-                show_screenshot_failure_notification(app, &error);
-                return None;
-            }
-        };
+#[tauri::command]
+async fn save_screenshot_png(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    png_base64: String,
+) -> Result<ScreenshotSavePayload, ScreenshotSaveError> {
+    let coordinator = state.screenshot.clone();
+    let captured_at = coordinator
+        .captured_at()
+        .ok_or_else(|| ScreenshotSaveError {
+            message: "截图编辑会话已失效".into(),
+            directory_unavailable: false,
+        })?;
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|_| ScreenshotSaveError {
+            message: "无法读取截图设置".into(),
+            directory_unavailable: true,
+        })?
+        .clone();
+    let directory =
+        effective_screenshot_directory(&app, &settings).map_err(|message| ScreenshotSaveError {
+            message,
+            directory_unavailable: true,
+        })?;
 
-        match screenshot::ensure_save_directory(&directory) {
-            Ok(()) => return Some(directory),
-            Err(error) => {
-                let result = app
-                    .dialog()
-                    .message(error)
-                    .title("截图目录不可用")
-                    .kind(MessageDialogKind::Error)
-                    .buttons(MessageDialogButtons::YesNoCancelCustom(
-                        "重新选择目录".into(),
-                        "恢复桌面".into(),
-                        "取消".into(),
-                    ))
-                    .blocking_show_with_result();
-                match result {
-                    MessageDialogResult::Custom(label) if label == "重新选择目录" => {
-                        let selected = match pick_screenshot_directory(app) {
-                            Ok(selected) => selected,
-                            Err(error) => {
-                                show_screenshot_failure_notification(app, &error);
-                                return None;
-                            }
-                        };
-                        let selected = selected?;
-                        if let Err(error) = update_screenshot_directory(app, Some(&selected)) {
-                            show_screenshot_failure_notification(app, &error);
-                            return None;
-                        }
-                    }
-                    MessageDialogResult::Custom(label) if label == "恢复桌面" => {
-                        if let Err(error) = update_screenshot_directory(app, None) {
-                            show_screenshot_failure_notification(app, &error);
-                            return None;
-                        }
-                    }
-                    _ => return None,
-                }
+    let saved_path = tauri::async_runtime::spawn_blocking(move || {
+        let bytes =
+            screenshot::decode_png_base64(&png_base64).map_err(|message| ScreenshotSaveError {
+                message,
+                directory_unavailable: false,
+            })?;
+        screenshot::ensure_save_directory(&directory).map_err(|message| ScreenshotSaveError {
+            message,
+            directory_unavailable: true,
+        })?;
+        screenshot::write_screenshot_png(&directory, &captured_at, &bytes).map_err(|message| {
+            ScreenshotSaveError {
+                message,
+                directory_unavailable: true,
             }
-        }
+        })
+    })
+    .await
+    .map_err(|error| ScreenshotSaveError {
+        message: error.to_string(),
+        directory_unavailable: false,
+    })??;
+
+    let filename = saved_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "PNG 图片".into());
+    finish_screenshot_task(&app, &coordinator);
+    let _ = app
+        .notification()
+        .builder()
+        .title("截图已保存")
+        .body(&filename)
+        .show();
+    Ok(ScreenshotSavePayload { filename })
+}
+
+#[tauri::command]
+async fn repair_screenshot_directory(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    action: String,
+) -> Result<Option<String>, String> {
+    if !state.screenshot.is_active() {
+        return Err("截图编辑会话已失效".into());
     }
+    tauri::async_runtime::spawn_blocking(move || match action.as_str() {
+        "choose" => {
+            let Some(directory) = pick_screenshot_directory(&app)? else {
+                return Ok(None);
+            };
+            screenshot::ensure_save_directory(&directory)?;
+            update_screenshot_directory(&app, Some(&directory))?;
+            Ok(Some(directory.to_string_lossy().into_owned()))
+        }
+        "desktop" => {
+            update_screenshot_directory(&app, None)?;
+            let state = app
+                .try_state::<AppState>()
+                .ok_or("app state is not available")?;
+            let settings = state
+                .settings
+                .lock()
+                .map_err(|_| "settings lock poisoned")?
+                .clone();
+            let directory = effective_screenshot_directory(&app, &settings)?;
+            screenshot::ensure_save_directory(&directory)?;
+            Ok(Some(directory.to_string_lossy().into_owned()))
+        }
+        _ => Err("未知的截图目录修复动作".into()),
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn show_screenshot_permission_prompt(app: &AppHandle) {
@@ -2056,6 +2268,9 @@ pub fn run() {
         .setup(|app| {
             let loaded_settings = load_settings(app.handle());
             let loaded_remember = remember::load(app.handle());
+            if let Ok(cache_directory) = app.path().app_cache_dir() {
+                screenshot::cleanup_cache(&cache_directory);
+            }
             {
                 let state = app.state::<AppState>();
                 let mut settings = state.settings.lock().expect("settings lock poisoned");
@@ -2090,6 +2305,12 @@ pub fn run() {
             persist_pet_position,
             save_user_preferences,
             choose_screenshot_directory,
+            screenshot_claim_selection,
+            screenshot_release_selection,
+            capture_screenshot_selection,
+            save_screenshot_png,
+            repair_screenshot_directory,
+            cancel_screenshot_task,
             show_pet_menu,
             focus_session_action,
             get_remember_snapshot,

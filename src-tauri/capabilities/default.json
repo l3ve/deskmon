@@ -5,7 +5,8 @@
   "windows": [
     "pet",
     "settings",
-    "remember"
+    "remember",
+    "screenshot-*"
   ],
   "permissions": [
     "core:default",
