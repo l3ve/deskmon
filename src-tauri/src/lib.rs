@@ -1,9 +1,13 @@
+mod external_notification;
 mod focus_session;
 mod geometry;
 mod remember;
 mod screenshot;
 mod settings;
 
+use external_notification::{
+    CliInstallationState, ExternalNotificationRequest, NotificationDisposition,
+};
 use focus_session::{
     CompletionFeedback, FocusSession, FocusSessionAction, FocusSessionConfig, FocusSessionPhase,
     FocusSessionSnapshot, TimerKind, EXTRA_SEGMENT_MINUTES,
@@ -51,6 +55,7 @@ const TRAY_ID: &str = "deskmon-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../assets/tray-icon.png");
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
+const EXTERNAL_NOTIFICATION_EVENT: &str = "deskmon-external-notification";
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
 const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
@@ -69,6 +74,7 @@ struct BootstrapPayload {
     pet_position: Point,
     focus_session: FocusSessionSnapshot,
     screenshot_directory: String,
+    cli_installation_state: CliInstallationState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,6 +189,7 @@ fn get_bootstrap(
         pet_position: position,
         focus_session,
         screenshot_directory: screenshot_directory.to_string_lossy().into_owned(),
+        cli_installation_state: external_notification::cli_installation_state(),
     })
 }
 
@@ -274,6 +281,7 @@ fn move_pet_window(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn set_pet_temporary_presentation(
     app: AppHandle,
     x: f64,
@@ -282,6 +290,7 @@ fn set_pet_temporary_presentation(
     height: f64,
     always_on_top: bool,
     visible: bool,
+    ignore_cursor_events: Option<bool>,
 ) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(PET_WINDOW) {
         window
@@ -296,6 +305,11 @@ fn set_pet_temporary_presentation(
         window
             .set_always_on_top(always_on_top)
             .map_err(|err| err.to_string())?;
+        if let Some(ignore_cursor_events) = ignore_cursor_events {
+            window
+                .set_ignore_cursor_events(ignore_cursor_events)
+                .map_err(|err| err.to_string())?;
+        }
         if visible {
             window.show().map_err(|err| err.to_string())?;
         } else {
@@ -531,9 +545,11 @@ fn start_region_screenshot(app: &AppHandle, state: &tauri::State<'_, AppState>) 
     if !state.screenshot.try_begin() {
         return;
     }
+    let _ = app.emit("deskmon-screenshot-state-changed", true);
     if let Err(error) = create_screenshot_windows(app) {
         eprintln!("failed to create screenshot overlays: {error}");
         state.screenshot.finish();
+        let _ = app.emit("deskmon-screenshot-state-changed", false);
         close_screenshot_windows(app);
         show_screenshot_failure_notification(app, &error);
     }
@@ -617,6 +633,7 @@ fn close_screenshot_windows(app: &AppHandle) {
 fn finish_screenshot_task(app: &AppHandle, coordinator: &ScreenshotCoordinator) {
     coordinator.finish();
     close_screenshot_windows(app);
+    let _ = app.emit("deskmon-screenshot-state-changed", false);
 }
 
 #[tauri::command]
@@ -2259,6 +2276,68 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn publish_external_notification(
+    app: &AppHandle,
+    request: ExternalNotificationRequest,
+) -> Result<NotificationDisposition, String> {
+    if request.text.trim().is_empty() {
+        return Ok(NotificationDisposition::Ignored);
+    }
+    let state = app
+        .try_state::<AppState>()
+        .ok_or("app state is not available")?;
+    let visible = state
+        .settings
+        .lock()
+        .map_err(|_| "settings lock poisoned")?
+        .pet_visible;
+    if !visible {
+        return Ok(NotificationDisposition::Ignored);
+    }
+    if app.get_webview_window(PET_WINDOW).is_none() {
+        return Err("pet window is not available".into());
+    }
+    app.emit_to(PET_WINDOW, EXTERNAL_NOTIFICATION_EVENT, request)
+        .map_err(|error| error.to_string())?;
+    Ok(NotificationDisposition::Accepted)
+}
+
+#[tauri::command]
+fn get_cli_installation_state() -> CliInstallationState {
+    external_notification::cli_installation_state()
+}
+
+#[tauri::command]
+async fn set_cli_installed(
+    app: AppHandle,
+    installed: bool,
+) -> Result<CliInstallationState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if installed {
+            external_notification::install_cli()
+        } else {
+            external_notification::uninstall_cli()
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+
+    if installed {
+        let _ = publish_external_notification(
+            &app,
+            ExternalNotificationRequest {
+                title: Some("Deskmon".into()),
+                text: "命令行工具已安装".into(),
+            },
+        );
+    }
+    Ok(external_notification::cli_installation_state())
+}
+
+pub fn run_cli_if_requested() -> Option<i32> {
+    external_notification::run_cli_if_requested()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2287,6 +2366,11 @@ pub fn run() {
             create_pet_window(app)?;
             create_tray(app)?;
 
+            let notification_app = app.handle().clone();
+            external_notification::spawn_notification_server(move |request| {
+                publish_external_notification(&notification_app, request)
+            })?;
+
             app.on_menu_event(|app_handle, event| {
                 handle_menu_event(app_handle, event.id().0.as_str());
             });
@@ -2304,6 +2388,8 @@ pub fn run() {
             set_pet_temporary_presentation,
             persist_pet_position,
             save_user_preferences,
+            get_cli_installation_state,
+            set_cli_installed,
             choose_screenshot_directory,
             screenshot_claim_selection,
             screenshot_release_selection,

@@ -8,12 +8,16 @@
 - `src/pet/activityCadence.ts`: 桌宠活动节奏策略，集中管理安静/标准/活泼的速度、run 概率、休息窗口、到达阈值和状态切换节奏常量。
 - `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
 - `src/pet/giantCelebration.ts`: 倒计时结束巨型庆祝动效的状态、分段时间和尺寸/位置插值。
+- `src/pet/externalNotificationState.ts`: 外部提醒文本规范化、Unicode 截断、去重、容量和停留时间规则。
+- `src/pet/externalNotificationPresentation.ts`: 外部提醒进入/恢复动效、多显示器目标与 RPG 对话布局算法。
+- `src/settings.ts`: 设置窗口前端，负责桌宠、专注、截图、CLI 安装状态和活动区域配置。
 - `src/pet/slime.ts`: 默认史莱姆 sprite sheet 加载、逐帧裁剪、锚点归一化和代码绘制兜底。
 - `src/assets/slime/*.png`: 默认史莱姆 7 个状态的 sprite sheet 素材。
 - `src-tauri/src/lib.rs`: macOS 窗口、托盘菜单、计时器状态、Tauri command 和应用编排。
 - `src-tauri/src/focus_session.rs`: 当前一轮的五状态流程、计时段、动作转换、完成反馈和纯逻辑测试。
 - `src-tauri/src/geometry.rs`: 后端屏幕、活动区域、宠物物理尺寸和可见工作区 clamp 逻辑。
 - `src-tauri/src/screenshot.rs`: 区域截图任务锁、目录检查、英文时间文件名、重名避让、原生执行和结果分类。
+- `src-tauri/src/external_notification.rs`: `deskmon notify` 参数、本地 Unix Socket、端点权限和 CLI 安装归属管理。
 - `src-tauri/src/settings.rs`: 用户偏好类型、默认值、逻辑尺寸映射和 settings.json 读写。
 - `src-tauri/assets/tray-icon.png`: macOS 菜单栏专用 template 图标，编译进 Rust，不放进 `src-tauri/icons`。
 - `src-tauri/src/remember.rs`: “记忆力”状态、文本规范化、笔记本加密/解密和核心规则测试。
@@ -26,6 +30,7 @@
 - `docs/prds/006-lightweight-focus-timer.md`: 轻量专注计时器 PRD，覆盖专注/休息计时、自定义快捷时长、完成文案和休息结束系统声音边界。
 - `docs/prds/007-macos-region-screenshot.md`: macOS 区域截图 PRD，覆盖原生矩形框选、PNG 文件直存、保存目录设置、权限与失败反馈边界。
 - `docs/prds/008-screenshot-annotation-editor.md`: 区域截图标注编辑器 V1 PRD，覆盖强制编辑、五项工具、保存时落盘和关闭丢弃规则。
+- `docs/prds/009-local-pet-notification-cli.md`: 本地宠物提醒 CLI PRD，覆盖本机调用契约、中央 RPG 对话提醒、最多三条并发和 macOS CLI 安装边界。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -145,6 +150,13 @@
 - 截图覆盖层中的 `[hidden]` 需要专用 CSS 强制 `display: none`，避免工具栏的 `display: grid` 覆盖 HTML 隐藏属性。
 - 截图工具栏初始隐藏；有效选区完成后按下方优先、上方兜底定位，正常选区与工具栏之间保持 8px 间距。
 - MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。
+- 外部宠物提醒 V1 只公开 macOS 本地 `deskmon notify` CLI；Deskmon 未运行或宠物隐藏时静默忽略并返回成功，不自动启动应用。
+- 外部提醒使用当前同一只宠物临时居中、置顶播放 `celebrate`，文字使用点击穿透的 RPG 对话框；不创建宠物分身，不写入普通位置、尺寸或置顶偏好。
+- 外部提醒标题最多 10 字、正文最多 50 字，超长按完整 Unicode 字符截断并显示省略号；纯文本正文为空时整条静默忽略。
+- 外部提醒最多同时保留 3 条，第 4 条替换最旧条目；10 秒内相同最终显示内容合并计数，每次新增或重复更新都把结束时间重置为到达时刻加 3 秒。
+- 拖拽和截图任务期间延迟外部提醒；专注中央交接期间外部对话放在未占用一侧并保持原按钮可用；用户隐藏宠物会立即中止并清空提醒。
+- 外部提醒不播放声音、不发送 macOS 系统通知、不持久化、不进入“记忆力”，也不迁移现有专注、截图或记忆力反馈。
+- 设置页“命令行工具”面板显式安装、更新或卸载 `/usr/local/bin/deskmon`，并就地展示状态和失败原因；菜单栏不放安装入口，同名非 Deskmon 命令不得覆盖或删除。
 
 ## Known Issues
 

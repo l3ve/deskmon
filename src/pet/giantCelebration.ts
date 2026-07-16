@@ -37,6 +37,7 @@ export interface TemporaryPetPresentation {
   dimensions: Dimensions;
   alwaysOnTop: boolean;
   visible: boolean;
+  ignoreCursorEvents?: boolean;
 }
 
 interface CreateGiantCelebrationInput {
