@@ -1,10 +1,11 @@
 # PRD：Deskmon 本地宠物提醒 CLI
 
-状态：已实现，待提交发布
+状态：已提交，待合并
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-15
 最后更新：2026-07-16
 发布状态：已发布到 GitHub issue #17：https://github.com/l3ve/deskmon/issues/17
+实现 PR：https://github.com/l3ve/deskmon/pull/18
 
 ## 问题陈述
 
