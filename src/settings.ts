@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ActivityLevel,
   BootstrapPayload,
+  CliInstallationState,
   Dimensions,
   FocusTimerPreferences,
   PetSize,
@@ -41,6 +42,9 @@ class SettingsController {
   private readonly canvas = document.createElement("canvas");
   private readonly status = document.createElement("p");
   private draftPreferences: UserPreferences | null = null;
+  private cliOperationInFlight = false;
+  private cliFeedback: string | null = null;
+  private cliFeedbackTone: "neutral" | "success" | "warning" | "error" = "neutral";
   private saveQueue: Promise<BootstrapPayload | null> = Promise.resolve(null);
   private statusMessage: string | null = null;
   private statusTone: "neutral" | "success" | "warning" | "error" = "neutral";
@@ -59,6 +63,8 @@ class SettingsController {
     if (!this.bootstrap) {
       return;
     }
+    const previousScrollTop =
+      this.root.querySelector<HTMLElement>(".settings-content")?.scrollTop ?? 0;
     const settings = this.bootstrap.settings;
     this.root.replaceChildren();
 
@@ -76,6 +82,7 @@ class SettingsController {
       this.summaryItem("置顶", settings.alwaysOnTop ? "开启" : "关闭"),
       this.summaryItem("计时", this.focusTimerSummary(settings.focusTimer)),
       this.summaryItem("截图", settings.screenshot.saveDirectory ? "自定义" : "桌面"),
+      this.summaryItem("命令", cliInstallationLabel(this.bootstrap.cliInstallationState)),
       this.summaryItem("区域", this.customArea ? formatDimensions(this.customArea) : "默认"),
     );
 
@@ -105,6 +112,7 @@ class SettingsController {
 
     const focusTimerPanel = this.focusTimerPanel(settings.focusTimer);
     const screenshotPanel = this.screenshotPanel();
+    const cliToolPanel = this.cliToolPanel(this.bootstrap.cliInstallationState);
 
     const areaPanel = element("section", "settings-panel area-panel");
     const areaHeader = element("div", "panel-header");
@@ -126,14 +134,17 @@ class SettingsController {
     areaPanel.append(areaHeader, canvasWrap, this.status);
 
     const content = element("main", "settings-content");
-    content.append(controls, focusTimerPanel, screenshotPanel, areaPanel);
+    content.append(controls, focusTimerPanel, screenshotPanel, cliToolPanel, areaPanel);
 
     const workspace = element("div", "settings-workspace");
     workspace.append(sidebar, content);
 
     shell.append(header, workspace);
     this.root.append(shell);
-    requestAnimationFrame(() => this.drawAreaCanvas());
+    requestAnimationFrame(() => {
+      content.scrollTop = previousScrollTop;
+      this.drawAreaCanvas();
+    });
   }
 
   private summaryItem(label: string, value: string): HTMLElement {
@@ -253,6 +264,102 @@ class SettingsController {
     fields.append(field);
     panel.append(header, fields);
     return panel;
+  }
+
+  private cliToolPanel(state: CliInstallationState): HTMLElement {
+    const panel = element("section", "settings-panel cli-tool-panel");
+    const header = element("div", "panel-header cli-tool-header");
+    header.append(
+      element("h2", "", "命令行工具"),
+      element(
+        "span",
+        `cli-tool-state ${cliInstallationTone(state)}`,
+        cliInstallationLabel(state),
+      ),
+    );
+
+    const body = element("div", "cli-tool-body");
+    const copy = element("div", "cli-tool-copy");
+    copy.append(
+      element("p", "cli-tool-description", cliInstallationDescription(state)),
+      element("code", "cli-tool-path", "/usr/local/bin/deskmon"),
+    );
+
+    const action = element(
+      "button",
+      state === "installed" ? "ghost-button cli-tool-action danger" : "ghost-button cli-tool-action",
+      this.cliOperationInFlight ? "处理中…" : cliInstallationAction(state),
+    ) as HTMLButtonElement;
+    action.type = "button";
+    action.disabled = this.cliOperationInFlight;
+    action.addEventListener("click", () => {
+      if (state === "conflict") {
+        void this.refreshCliInstallationState();
+        return;
+      }
+      void this.setCliInstalled(state !== "installed");
+    });
+    body.append(copy, action);
+
+    const feedback = element(
+      "p",
+      `cli-tool-feedback ${this.cliFeedbackTone}`,
+      this.cliFeedback ?? "安装和卸载都会请求一次 macOS 管理员授权。",
+    );
+    feedback.setAttribute("aria-live", "polite");
+    panel.append(header, body, feedback);
+    return panel;
+  }
+
+  private async setCliInstalled(installed: boolean): Promise<void> {
+    if (!this.bootstrap || this.cliOperationInFlight) {
+      return;
+    }
+    this.cliOperationInFlight = true;
+    this.cliFeedback = installed ? "正在等待安装授权…" : "正在等待卸载授权…";
+    this.cliFeedbackTone = "neutral";
+    this.render();
+    try {
+      this.bootstrap.cliInstallationState = await invoke<CliInstallationState>(
+        "set_cli_installed",
+        { installed },
+      );
+      this.cliFeedback = installed ? "命令行工具已安装。" : "命令行工具已卸载。";
+      this.cliFeedbackTone = "success";
+    } catch (error) {
+      this.cliFeedback = String(error);
+      this.cliFeedbackTone = "error";
+    } finally {
+      this.cliOperationInFlight = false;
+      this.render();
+    }
+  }
+
+  private async refreshCliInstallationState(): Promise<void> {
+    if (!this.bootstrap || this.cliOperationInFlight) {
+      return;
+    }
+    this.cliOperationInFlight = true;
+    this.cliFeedback = "正在重新检查安装路径…";
+    this.cliFeedbackTone = "neutral";
+    this.render();
+    try {
+      this.bootstrap.cliInstallationState = await invoke<CliInstallationState>(
+        "get_cli_installation_state",
+      );
+      this.cliFeedback =
+        this.bootstrap.cliInstallationState === "conflict"
+          ? "路径仍被其他程序占用。"
+          : "安装状态已更新。";
+      this.cliFeedbackTone =
+        this.bootstrap.cliInstallationState === "conflict" ? "warning" : "success";
+    } catch (error) {
+      this.cliFeedback = String(error);
+      this.cliFeedbackTone = "error";
+    } finally {
+      this.cliOperationInFlight = false;
+      this.render();
+    }
   }
 
   private async chooseScreenshotDirectory(): Promise<void> {
@@ -681,6 +788,44 @@ function normalizeRect(a: Point, b: Point): Rect {
 
 function formatDimensions(size: Dimensions): string {
   return `${Math.round(size.width)} x ${Math.round(size.height)}`;
+}
+
+function cliInstallationLabel(state: CliInstallationState): string {
+  return {
+    notInstalled: "未安装",
+    installed: "已安装",
+    updatable: "需要更新",
+    conflict: "路径冲突",
+  }[state];
+}
+
+function cliInstallationTone(
+  state: CliInstallationState,
+): "neutral" | "success" | "warning" | "error" {
+  return {
+    notInstalled: "neutral",
+    installed: "success",
+    updatable: "warning",
+    conflict: "error",
+  }[state] as "neutral" | "success" | "warning" | "error";
+}
+
+function cliInstallationDescription(state: CliInstallationState): string {
+  return {
+    notInstalled: "安装后，本机工具可以通过 deskmon notify 调用宠物提醒。",
+    installed: "命令已连接到当前 Deskmon，可直接从终端或自动化脚本调用。",
+    updatable: "当前命令指向旧版 Deskmon，更新后会连接到这个应用。",
+    conflict: "该路径已被其他程序占用。移走冲突文件后再重新检查。",
+  }[state];
+}
+
+function cliInstallationAction(state: CliInstallationState): string {
+  return {
+    notInstalled: "安装…",
+    installed: "卸载…",
+    updatable: "更新…",
+    conflict: "重新检查",
+  }[state];
 }
 
 function cloneFocusTimer(focusTimer: FocusTimerPreferences): FocusTimerPreferences {

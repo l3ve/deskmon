@@ -5,6 +5,7 @@ import {
   clampPointToRect,
   cursorInsideFrame,
   distance,
+  monitorForPoint,
   moveTowards,
   near,
   pointInsideRect,
@@ -24,6 +25,33 @@ import {
   type TemporaryPetPresentation,
 } from "./pet/giantCelebration";
 import { createFocusDialog, type FocusDialogController } from "./pet/focusDialog";
+import {
+  createExternalNotificationDialog,
+  type ExternalNotificationDialogController,
+} from "./pet/externalNotificationDialog";
+import {
+  createExternalNotificationLayout,
+  createExternalNotificationPresentation,
+  externalNotificationEnterFrame,
+  externalNotificationEnterMs,
+  externalNotificationRestoreFrame,
+  externalNotificationRestoreMs,
+  externalNotificationRestoreTarget,
+  externalNotificationSyncIntervalMs,
+  type ExternalNotificationLayout,
+  type ExternalNotificationPresentationFrame,
+  type ExternalNotificationPresentationState,
+} from "./pet/externalNotificationPresentation";
+import {
+  clearExternalNotifications,
+  createExternalNotificationState,
+  enqueueExternalNotification,
+  externalNotificationsExpired,
+  pauseExternalNotifications,
+  startExternalNotifications,
+  type ExternalNotificationPayload,
+  type ExternalNotificationState,
+} from "./pet/externalNotificationState";
 import {
   createFocusPresentationLayout,
   presentationMonitorIsAvailable,
@@ -72,6 +100,7 @@ export function mountPet(root: HTMLElement): void {
 }
 
 type FlowPresentationMode = "entering" | "holding" | "restoring";
+type ExternalPresentationMode = "entering" | "holding" | "restoring";
 
 class PetController {
   private activityArea: Rect = { x: 0, y: 0, width: 800, height: 500 };
@@ -79,10 +108,19 @@ class PetController {
   private isMovingFast = false;
   private lastFrameTime = performance.now();
   private lastHoverFrameCheck = 0;
+  private lastExternalPresentationMonitorCheck = 0;
   private lastWindowSync = 0;
   private lastPresentationMonitorCheck = 0;
   private facing: PetFacing = "right";
   private giantCelebration: GiantCelebrationState | null = null;
+  private externalDialog: ExternalNotificationDialogController;
+  private externalNotifications: ExternalNotificationState = createExternalNotificationState();
+  private externalPresentation: ExternalNotificationPresentationState | null = null;
+  private externalPresentationMode: ExternalPresentationMode | null = null;
+  private externalPresentationLayout: ExternalNotificationLayout | null = null;
+  private externalRestoreStartedAt = 0;
+  private externalPresentationContextInFlight = false;
+  private screenshotActive = false;
   private flowPresentationMode: FlowPresentationMode | null = null;
   private flowPresentationLayout: FocusPresentationLayout | null = null;
   private flowRestoreStartedAt = 0;
@@ -124,7 +162,9 @@ class PetController {
     private readonly canvas: HTMLCanvasElement,
   ) {
     this.focusDialog = createFocusDialog((action) => this.performFocusSessionAction(action));
+    this.externalDialog = createExternalNotificationDialog();
     this.root.append(this.focusDialog.element);
+    this.root.append(this.externalDialog.element);
     this.canvas.addEventListener("pointerenter", () => {
       this.pointerOverPet = true;
     });
@@ -137,7 +177,7 @@ class PetController {
     this.canvas.addEventListener("pointercancel", () => this.finishDrag());
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
-      if (this.flowPresentationMode === "restoring") {
+      if (this.flowPresentationMode === "restoring" || this.externalPresentationMode) {
         return;
       }
       void invoke("show_pet_menu");
@@ -161,6 +201,31 @@ class PetController {
         this.settings.movementPaused = event.payload;
       }
     });
+    void listen<ExternalNotificationPayload>("deskmon-external-notification", (event) => {
+      const result = enqueueExternalNotification(
+        this.externalNotifications,
+        event.payload,
+        performance.now(),
+      );
+      this.externalNotifications = result.state;
+      if (result.accepted) {
+        if (this.externalPresentationMode === "holding" && this.externalPresentation) {
+          this.applyExternalLayout(this.externalPresentation, null, true);
+        } else if (this.flowPresentationMode === "holding") {
+          this.holdFlowPresentation();
+        } else {
+          this.tryBeginExternalPresentation();
+        }
+      }
+    });
+    void listen<boolean>("deskmon-screenshot-state-changed", (event) => {
+      this.screenshotActive = event.payload;
+      if (event.payload) {
+        this.pauseExternalForInterruption();
+      } else {
+        this.tryBeginExternalPresentation();
+      }
+    });
     void listen<FocusSessionSnapshot>("deskmon-focus-session-changed", (event) => {
       const previous = this.focusSession;
       this.focusSession = event.payload;
@@ -179,11 +244,18 @@ class PetController {
       if (!event.payload && this.flowPresentationMode) {
         this.finishFlowPresentation(true);
       }
+      if (!event.payload) {
+        this.externalNotifications = clearExternalNotifications(this.externalNotifications);
+        this.externalDialog.clear();
+        this.finishExternalPresentation(true, false);
+      } else {
+        this.tryBeginExternalPresentation();
+      }
     });
     void listen("deskmon-settings-changed", async () => {
       const bootstrap = await invoke<BootstrapPayload>("get_desktop_snapshot");
       this.applyBootstrap(bootstrap);
-      if (!this.flowPresentationMode) {
+      if (!this.flowPresentationMode && !this.externalPresentationMode) {
         this.resizeCanvas();
         this.pickTarget();
       }
@@ -200,6 +272,11 @@ class PetController {
       this.giantCelebration.restoreWindowDimensions = bootstrap.petWindowDimensions;
       return;
     }
+    if (this.externalPresentationMode && this.externalPresentation) {
+      this.externalPresentation.restorePetDimensions = bootstrap.petDimensions;
+      this.externalPresentation.restoreWindowDimensions = bootstrap.petWindowDimensions;
+      return;
+    }
     this.petDimensions = bootstrap.petDimensions;
     this.petWindowDimensions = bootstrap.petWindowDimensions;
     this.position = bootstrap.petPosition;
@@ -209,7 +286,9 @@ class PetController {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.style.width = `${this.petDimensions.width}px`;
     this.canvas.style.height = `${this.petDimensions.height}px`;
-    const petOffset = this.flowPresentationLayout?.petOffset ?? { x: 0, y: 0 };
+    const petOffset =
+      this.externalPresentationLayout?.petOffset ??
+      this.flowPresentationLayout?.petOffset ?? { x: 0, y: 0 };
     this.canvas.style.left = `${petOffset.x}px`;
     this.canvas.style.top = `${petOffset.y}px`;
     const width = Math.max(1, Math.round(this.petDimensions.width * dpr));
@@ -234,8 +313,15 @@ class PetController {
       return;
     }
 
+    this.updateExternalNotificationLifetime(time);
+
     if (this.flowPresentationMode) {
       this.updateFlowPresentation(time);
+      return;
+    }
+
+    if (this.externalPresentationMode) {
+      this.updateExternalPresentation(time);
       return;
     }
 
@@ -404,6 +490,380 @@ class PetController {
       });
   }
 
+  private canPresentExternalNotification(): boolean {
+    return (
+      this.settings?.petVisible !== false &&
+      !this.screenshotActive &&
+      !this.drag
+    );
+  }
+
+  private tryBeginExternalPresentation(): void {
+    if (
+      this.externalNotifications.items.length === 0 ||
+      this.externalNotifications.presenting ||
+      !this.canPresentExternalNotification()
+    ) {
+      return;
+    }
+
+    if (this.flowPresentationMode === "holding") {
+      this.externalNotifications = startExternalNotifications(
+        this.externalNotifications,
+        performance.now(),
+      );
+      this.holdFlowPresentation();
+      return;
+    }
+    if (
+      this.flowPresentationMode ||
+      this.externalPresentationMode ||
+      this.externalPresentationContextInFlight
+    ) {
+      return;
+    }
+
+    this.externalPresentationContextInFlight = true;
+    invoke<FocusPresentationContext>("get_focus_presentation_context")
+      .then((context) => {
+        if (
+          this.externalNotifications.items.length === 0 ||
+          !this.canPresentExternalNotification() ||
+          this.flowPresentationMode ||
+          this.externalPresentationMode
+        ) {
+          return;
+        }
+        this.monitors = context.monitors;
+        const time = performance.now();
+        const presentation = createExternalNotificationPresentation({
+          startedAt: time,
+          petDimensions: this.petDimensions,
+          petWindowDimensions: this.petWindowDimensions,
+          position: this.position,
+          monitors: this.monitors,
+          activityArea: this.activityArea,
+          coordinateScale: this.coordinateScale(),
+          targetPoint: context.cursor,
+        });
+        if (!presentation) {
+          return;
+        }
+        this.externalPresentation = presentation;
+        this.externalPresentationMode = "entering";
+        this.externalPresentationLayout = null;
+        this.pointerOverPet = false;
+        this.target = null;
+        this.root.classList.add("external-presenting", "external-entering");
+        this.mood = "celebrate";
+        this.updateExternalPresentation(time, true);
+      })
+      .catch(() => {
+        // Keep the reminder queued if native monitor context is temporarily unavailable.
+      })
+      .finally(() => {
+        this.externalPresentationContextInFlight = false;
+      });
+  }
+
+  private updateExternalNotificationLifetime(time: number): void {
+    if (!this.externalNotifications.presenting) {
+      return;
+    }
+    if (externalNotificationsExpired(this.externalNotifications, time)) {
+      this.externalNotifications = clearExternalNotifications(this.externalNotifications);
+      this.externalDialog.clear();
+      if (this.externalPresentationMode) {
+        this.beginExternalRestore();
+      } else if (this.flowPresentationMode === "holding") {
+        if (this.focusUsesCentralPresentation()) {
+          this.holdFlowPresentation();
+        } else {
+          this.beginFlowRestore();
+        }
+      }
+      return;
+    }
+    this.externalDialog.render(this.externalNotifications.items, time);
+  }
+
+  private updateExternalPresentation(time: number, forceSync = false): void {
+    const presentation = this.externalPresentation;
+    const mode = this.externalPresentationMode;
+    if (!presentation || !mode) {
+      return;
+    }
+    if (mode === "entering") {
+      const elapsed = time - presentation.startedAt;
+      if (elapsed >= externalNotificationEnterMs) {
+        this.holdExternalPresentation(time);
+        return;
+      }
+      this.applyExternalSquareFrame(
+        externalNotificationEnterFrame(presentation, elapsed),
+        time,
+        forceSync,
+      );
+      this.mood = "celebrate";
+      return;
+    }
+    if (mode === "restoring") {
+      const elapsed = time - this.externalRestoreStartedAt;
+      if (elapsed >= externalNotificationRestoreMs) {
+        this.finishExternalPresentation(false, true);
+        return;
+      }
+      this.applyExternalSquareFrame(
+        externalNotificationRestoreFrame(
+          presentation,
+          this.getExternalRestoreTarget(presentation),
+          elapsed,
+        ),
+        time,
+        forceSync,
+      );
+      return;
+    }
+
+    this.reconcileExternalPresentationMonitor(time);
+    this.mood = "celebrate";
+    this.externalDialog.render(this.externalNotifications.items, time);
+  }
+
+  private reconcileExternalPresentationMonitor(time: number): void {
+    if (
+      this.externalPresentationContextInFlight ||
+      time - this.lastExternalPresentationMonitorCheck < 2000
+    ) {
+      return;
+    }
+    this.lastExternalPresentationMonitorCheck = time;
+    this.externalPresentationContextInFlight = true;
+    invoke<FocusPresentationContext>("get_focus_presentation_context")
+      .then((context) => {
+        const presentation = this.externalPresentation;
+        if (!presentation || this.externalPresentationMode !== "holding") {
+          return;
+        }
+        this.monitors = context.monitors;
+        if (monitorForPoint(presentation.targetCenter, context.monitors)) {
+          this.applyExternalLayout(presentation, null, true);
+          return;
+        }
+        const retargeted = createExternalNotificationPresentation({
+          startedAt: performance.now() - externalNotificationEnterMs,
+          petDimensions: presentation.normalPetDimensions,
+          petWindowDimensions: presentation.normalWindowDimensions,
+          position: topLeftFromCenter(
+            presentation.normalCenter,
+            presentation.normalWindowDimensions,
+          ),
+          monitors: context.monitors,
+          activityArea: this.activityArea,
+          coordinateScale:
+            presentation.normalWindowDimensions.width /
+            Math.max(1, presentation.normalPetDimensions.width),
+          targetPoint: context.cursor,
+        });
+        if (!retargeted) {
+          return;
+        }
+        retargeted.restorePetDimensions = presentation.restorePetDimensions;
+        retargeted.restoreWindowDimensions = presentation.restoreWindowDimensions;
+        this.externalPresentation = retargeted;
+        this.applyExternalLayout(retargeted, null, true);
+      })
+      .catch(() => {
+        // Keep the current presentation when monitor refresh is temporarily unavailable.
+      })
+      .finally(() => {
+        this.externalPresentationContextInFlight = false;
+      });
+  }
+
+  private getExternalRestoreTarget(
+    presentation: ExternalNotificationPresentationState,
+  ): ExternalNotificationPresentationFrame {
+    return externalNotificationRestoreTarget(
+      presentation,
+      this.monitors,
+      this.activityArea,
+      this.settings?.alwaysOnTop ?? true,
+    );
+  }
+
+  private applyExternalSquareFrame(
+    frame: ExternalNotificationPresentationFrame,
+    time: number,
+    forceSync = false,
+  ): void {
+    const presentation = this.externalPresentation;
+    const position = topLeftFromCenter(frame.center, frame.windowDimensions);
+    this.externalPresentationLayout = null;
+    this.externalDialog.hide();
+    this.petDimensions = frame.petDimensions;
+    this.petWindowDimensions = frame.windowDimensions;
+    this.position = position;
+    this.resizeCanvas();
+    if (
+      !presentation ||
+      (!forceSync &&
+        time - presentation.lastPresentationSync < externalNotificationSyncIntervalMs)
+    ) {
+      return;
+    }
+    presentation.lastPresentationSync = time;
+    this.requestTemporaryPetPresentation({
+      position,
+      dimensions: frame.petDimensions,
+      alwaysOnTop: frame.alwaysOnTop,
+      visible: true,
+      ignoreCursorEvents: true,
+    });
+  }
+
+  private holdExternalPresentation(time: number): void {
+    const presentation = this.externalPresentation;
+    if (!presentation) {
+      return;
+    }
+    this.externalPresentationMode = "holding";
+    this.root.classList.remove("external-entering");
+    this.root.classList.add("external-holding");
+    this.externalNotifications = startExternalNotifications(this.externalNotifications, time);
+    this.applyExternalLayout(presentation, null, true);
+  }
+
+  private applyExternalLayout(
+    presentation: Pick<
+      ExternalNotificationPresentationState,
+      "targetCenter" | "targetPetDimensions" | "targetWindowDimensions"
+    >,
+    focusLayout: FocusPresentationLayout | null,
+    ignoreCursorEvents: boolean,
+  ): void {
+    const layout = createExternalNotificationLayout(
+      presentation,
+      this.monitors,
+      this.activityArea,
+      this.externalNotifications.items.length,
+      focusLayout,
+    );
+    this.externalPresentationLayout = layout;
+    this.petDimensions = { ...layout.petDimensions };
+    this.petWindowDimensions = { ...presentation.targetWindowDimensions };
+    this.position = topLeftFromCenter(
+      presentation.targetCenter,
+      presentation.targetWindowDimensions,
+    );
+    this.resizeCanvas();
+
+    if (layout.focusDialogOffset) {
+      this.focusDialog.element.style.left = `${layout.focusDialogOffset.x}px`;
+      this.focusDialog.element.style.top = `${layout.focusDialogOffset.y}px`;
+    }
+    const dialogStyle = this.externalDialog.element.style;
+    dialogStyle.left = `${layout.notificationOffset.x}px`;
+    dialogStyle.top = `${layout.notificationOffset.y}px`;
+    dialogStyle.width = `${layout.notificationDimensions.width}px`;
+    dialogStyle.height = `${layout.notificationDimensions.height}px`;
+    this.externalDialog.setPlacement(layout.notificationPlacement);
+    this.externalDialog.render(this.externalNotifications.items, performance.now());
+    this.requestTemporaryPetPresentation({
+      position: layout.windowPosition,
+      dimensions: layout.windowLogicalDimensions,
+      alwaysOnTop: true,
+      visible: true,
+      ignoreCursorEvents,
+    });
+  }
+
+  private beginExternalRestore(): void {
+    const presentation = this.externalPresentation;
+    if (!presentation) {
+      this.finishExternalPresentation(false, true);
+      return;
+    }
+    this.externalDialog.hide();
+    this.root.classList.remove("external-holding");
+    this.externalPresentationLayout = null;
+    if (this.settings?.petVisible === false || this.externalPresentationMode === "entering") {
+      this.finishExternalPresentation(this.settings?.petVisible === false, true);
+      return;
+    }
+    this.externalPresentationMode = "restoring";
+    this.externalRestoreStartedAt = performance.now();
+    this.petDimensions = { ...presentation.targetPetDimensions };
+    this.petWindowDimensions = { ...presentation.targetWindowDimensions };
+    this.position = topLeftFromCenter(
+      presentation.targetCenter,
+      presentation.targetWindowDimensions,
+    );
+    this.resizeCanvas();
+    this.requestTemporaryPetPresentation({
+      position: this.position,
+      dimensions: presentation.targetPetDimensions,
+      alwaysOnTop: true,
+      visible: true,
+      ignoreCursorEvents: true,
+    });
+  }
+
+  private finishExternalPresentation(forceHidden = false, resumePending = true): void {
+    const presentation = this.externalPresentation;
+    this.externalDialog.hide();
+    this.root.classList.remove(
+      "external-presenting",
+      "external-entering",
+      "external-holding",
+    );
+    this.externalPresentationMode = null;
+    this.externalPresentationLayout = null;
+    this.externalPresentation = null;
+    if (!presentation) {
+      return;
+    }
+    const restoreTarget = this.getExternalRestoreTarget(presentation);
+    const position = topLeftFromCenter(restoreTarget.center, restoreTarget.windowDimensions);
+    this.petDimensions = restoreTarget.petDimensions;
+    this.petWindowDimensions = restoreTarget.windowDimensions;
+    this.position = position;
+    this.mood = this.focusSession.isRunning ? "timer-waiting" : "idle";
+    this.resizeCanvas();
+    this.requestTemporaryPetPresentation({
+      position,
+      dimensions: restoreTarget.petDimensions,
+      alwaysOnTop: restoreTarget.alwaysOnTop,
+      visible: !forceHidden && (this.settings?.petVisible ?? true),
+      ignoreCursorEvents: false,
+    });
+    this.pickTarget();
+    if (this.pendingFocusPresentation) {
+      this.pendingFocusPresentation = false;
+      this.beginFocusPresentation();
+    } else if (resumePending) {
+      this.tryBeginExternalPresentation();
+    }
+  }
+
+  private pauseExternalForInterruption(): void {
+    if (this.externalNotifications.presenting) {
+      this.externalNotifications = pauseExternalNotifications(this.externalNotifications);
+    }
+    this.externalDialog.hide();
+    if (this.externalPresentationMode) {
+      this.finishExternalPresentation(false, false);
+    } else if (this.flowPresentationMode === "holding") {
+      this.holdFlowPresentation();
+    }
+  }
+
+  private focusUsesCentralPresentation(): boolean {
+    return ["focusComplete", "breakRunning", "breakComplete"].includes(
+      this.focusSession.phase,
+    );
+  }
+
   private syncFocusSession(previous: FocusSessionSnapshot): void {
     const previousUsedCentralPresentation = [
       "focusComplete",
@@ -416,9 +876,15 @@ class PetController {
       this.focusSession.phase === "breakComplete"
     ) {
       if (!this.flowPresentationMode) {
+        if (this.externalPresentationMode) {
+          this.pendingFocusPresentation = true;
+          this.externalNotifications = pauseExternalNotifications(this.externalNotifications);
+          this.beginExternalRestore();
+          return;
+        }
         this.beginFocusPresentation();
       } else if (this.flowPresentationMode === "holding") {
-        this.focusDialog.render(this.focusSession);
+        this.holdFlowPresentation();
       }
       return;
     }
@@ -430,7 +896,11 @@ class PetController {
         previousUsedCentralPresentation &&
         this.flowPresentationMode !== "restoring"
       ) {
-        this.beginFlowRestore();
+        if (this.externalNotifications.presenting) {
+          this.holdFlowPresentation();
+        } else {
+          this.beginFlowRestore();
+        }
       }
       return;
     }
@@ -443,7 +913,11 @@ class PetController {
       this.pendingFocusPresentation = true;
       return;
     }
-    if (this.flowPresentationMode || this.focusPresentationContextInFlight) {
+    if (
+      this.flowPresentationMode ||
+      this.externalPresentationMode ||
+      this.focusPresentationContextInFlight
+    ) {
       return;
     }
 
@@ -536,7 +1010,10 @@ class PetController {
     }
 
     this.reconcilePresentationMonitor(time);
-    if (this.focusSession.phase === "breakRunning") {
+    if (this.externalNotifications.presenting) {
+      this.externalDialog.render(this.externalNotifications.items, time);
+      this.mood = "celebrate";
+    } else if (this.focusSession.phase === "breakRunning") {
       this.mood = "timer-waiting";
     } else {
       this.mood = time < this.completionCelebrateUntil ? "celebrate" : "idle";
@@ -587,34 +1064,57 @@ class PetController {
       return;
     }
 
-    const layout = createFocusPresentationLayout(
-      celebration,
-      this.monitors,
-      this.activityArea,
-    );
+    const focusVisible = this.focusUsesCentralPresentation();
+    const layout = focusVisible
+      ? createFocusPresentationLayout(celebration, this.monitors, this.activityArea)
+      : null;
     this.flowPresentationMode = "holding";
     this.flowPresentationLayout = layout;
     this.root.classList.remove("flow-entering");
     this.root.classList.add("flow-holding");
-    this.petDimensions = { ...layout.petDimensions };
+    this.petDimensions = { ...(layout?.petDimensions ?? celebration.targetPetDimensions) };
     this.petWindowDimensions = { ...celebration.targetWindowDimensions };
     this.position = topLeftFromCenter(
       celebration.targetCenter,
       celebration.targetWindowDimensions,
     );
     this.resizeCanvas();
-    const dialogStyle = this.focusDialog.element.style;
-    dialogStyle.left = `${layout.dialogOffset.x}px`;
-    dialogStyle.top = `${layout.dialogOffset.y}px`;
-    dialogStyle.width = `${layout.dialogDimensions.width}px`;
-    dialogStyle.height = `${layout.dialogDimensions.height}px`;
-    this.focusDialog.element.dataset.placement = layout.dialogPlacement;
-    this.focusDialog.render(this.focusSession);
+    if (layout) {
+      const dialogStyle = this.focusDialog.element.style;
+      dialogStyle.left = `${layout.dialogOffset.x}px`;
+      dialogStyle.top = `${layout.dialogOffset.y}px`;
+      dialogStyle.width = `${layout.dialogDimensions.width}px`;
+      dialogStyle.height = `${layout.dialogDimensions.height}px`;
+      this.focusDialog.element.dataset.placement = layout.dialogPlacement;
+      this.focusDialog.render(this.focusSession);
+    } else {
+      this.focusDialog.hide();
+    }
+    if (
+      !this.externalNotifications.presenting &&
+      this.externalNotifications.items.length > 0 &&
+      this.canPresentExternalNotification()
+    ) {
+      this.externalNotifications = startExternalNotifications(
+        this.externalNotifications,
+        performance.now(),
+      );
+    }
+    if (this.externalNotifications.presenting) {
+      this.applyExternalLayout(celebration, layout, !layout);
+      return;
+    }
+    this.externalPresentationLayout = null;
+    if (!layout) {
+      this.beginFlowRestore();
+      return;
+    }
     this.requestTemporaryPetPresentation({
       position: layout.windowPosition,
       dimensions: layout.windowLogicalDimensions,
       alwaysOnTop: true,
       visible: true,
+      ignoreCursorEvents: false,
     });
   }
 
@@ -625,8 +1125,10 @@ class PetController {
       return;
     }
     this.focusDialog.hide();
+    this.externalDialog.hide();
     this.root.classList.remove("flow-holding");
     this.flowPresentationLayout = null;
+    this.externalPresentationLayout = null;
     this.pendingFocusPresentation = false;
 
     if (this.settings?.petVisible === false || this.flowPresentationMode === "entering") {
@@ -648,6 +1150,7 @@ class PetController {
       dimensions: celebration.targetPetDimensions,
       alwaysOnTop: true,
       visible: true,
+      ignoreCursorEvents: true,
     });
   }
 
@@ -655,9 +1158,11 @@ class PetController {
     const celebration = this.giantCelebration;
     this.presentationRequestId += 1;
     this.focusDialog.hide();
+    this.externalDialog.hide();
     this.root.classList.remove("flow-presenting", "flow-entering", "flow-holding");
     this.flowPresentationMode = null;
     this.flowPresentationLayout = null;
+    this.externalPresentationLayout = null;
     this.giantCelebration = null;
     this.pendingFocusPresentation = false;
     this.completionCelebrateUntil = 0;
@@ -679,8 +1184,10 @@ class PetController {
       dimensions: restoreTarget.petDimensions,
       alwaysOnTop: restoreTarget.alwaysOnTop,
       visible: !forceHidden && (this.settings?.petVisible ?? true),
+      ignoreCursorEvents: false,
     });
     this.pickTarget();
+    this.tryBeginExternalPresentation();
   }
 
   private reconcilePresentationMonitor(time: number): void {
@@ -755,6 +1262,7 @@ class PetController {
       height: presentation.dimensions.height,
       alwaysOnTop: presentation.alwaysOnTop,
       visible: presentation.visible,
+      ignoreCursorEvents: presentation.ignoreCursorEvents,
     })
       .catch(() => {
         // A transient native presentation failure should not break the pet loop.
@@ -772,7 +1280,7 @@ class PetController {
       return;
     }
     event.preventDefault();
-    if (this.flowPresentationMode) {
+    if (this.flowPresentationMode || this.externalPresentationMode) {
       return;
     }
     this.canvas.setPointerCapture(event.pointerId);
@@ -803,7 +1311,7 @@ class PetController {
   }
 
   private onPointerMove(event: PointerEvent): void {
-    if (this.flowPresentationMode) {
+    if (this.flowPresentationMode || this.externalPresentationMode) {
       return;
     }
     if (!this.drag || this.drag.pointerId !== event.pointerId) {
@@ -863,7 +1371,9 @@ class PetController {
     if (shouldBeginPresentation) {
       this.pendingFocusPresentation = false;
       this.beginFocusPresentation();
+      return;
     }
+    this.tryBeginExternalPresentation();
   }
 
   private draw(time: number): void {

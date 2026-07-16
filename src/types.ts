@@ -1,5 +1,6 @@
 export type PetSize = "small" | "medium" | "large";
 export type ActivityLevel = "quiet" | "standard" | "lively";
+export type CliInstallationState = "notInstalled" | "installed" | "updatable" | "conflict";
 export type TimerKind = "focus" | "break";
 export type FocusSessionPhase =
   | "idle"
@@ -90,6 +91,7 @@ export interface BootstrapPayload {
   petPosition: Point;
   focusSession: FocusSessionSnapshot;
   screenshotDirectory: string;
+  cliInstallationState: CliInstallationState;
 }
 
 export interface WindowFramePayload {
