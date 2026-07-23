@@ -63,6 +63,18 @@ import {
   petCadence,
   type RestMood,
 } from "./pet/activityCadence";
+import {
+  advanceCursorInteraction,
+  cancelCursorInteraction,
+  createCursorInteractionState,
+  cursorChaseSpeed,
+  cursorInteractionAllowed,
+  cursorInteractionCadence,
+  cursorNoticeOffset,
+  sampleCursorInteraction,
+  type CursorInteractionPhase,
+  type CursorInteractionState,
+} from "./pet/cursorInteraction";
 import { spriteSlimeSkin, type PetFacing, type PetMood, type PetSkin } from "./pet/slime";
 import type {
   BootstrapPayload,
@@ -129,6 +141,13 @@ class PetController {
   private pendingFocusPresentation = false;
   private presentationRequestId = 0;
   private completionCelebrateUntil = 0;
+  private cursorInteraction: CursorInteractionState = createCursorInteractionState();
+  private cursorInteractionAppliedPhase: CursorInteractionPhase = "idle";
+  private cursorInteractionBlocked = false;
+  private cursorInteractionEpoch = 0;
+  private cursorInteractionSuppressedUntil = 0;
+  private cursorSampleInFlight = false;
+  private lastCursorSampleAt = 0;
   private mood: PetMood = "idle";
   private monitors: MonitorPayload[] = [];
   private moveInFlight = false;
@@ -167,9 +186,11 @@ class PetController {
     this.root.append(this.externalDialog.element);
     this.canvas.addEventListener("pointerenter", () => {
       this.pointerOverPet = true;
+      this.invalidateCursorInteraction();
     });
     this.canvas.addEventListener("pointerleave", () => {
       this.pointerOverPet = false;
+      this.suppressCursorInteraction(cursorInteractionCadence.pointerExitProtectionMs);
     });
     this.canvas.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     this.canvas.addEventListener("pointermove", (event) => this.onPointerMove(event));
@@ -177,6 +198,7 @@ class PetController {
     this.canvas.addEventListener("pointercancel", () => this.finishDrag());
     this.canvas.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      this.suppressCursorInteraction(cursorInteractionCadence.menuProtectionMs);
       if (this.flowPresentationMode === "restoring" || this.externalPresentationMode) {
         return;
       }
@@ -314,6 +336,7 @@ class PetController {
     }
 
     this.updateExternalNotificationLifetime(time);
+    const cursorInteractionAllowed = this.syncCursorInteractionAvailability(time);
 
     if (this.flowPresentationMode) {
       this.updateFlowPresentation(time);
@@ -347,6 +370,10 @@ class PetController {
       if (!this.focusSession.isRunning && time > this.restUntil + petCadence.pausedSleepDelayMs) {
         this.mood = "sleep";
       }
+      return;
+    }
+
+    if (cursorInteractionAllowed && this.updateCursorInteraction(time, dtSeconds)) {
       return;
     }
 
@@ -413,6 +440,180 @@ class PetController {
       .finally(() => {
         this.hoverFrameCheckInFlight = false;
       });
+  }
+
+  private cursorInteractionIsAllowed(time: number): boolean {
+    return cursorInteractionAllowed({
+      petVisible: this.settings?.petVisible === true,
+      movementPaused: this.settings?.movementPaused !== false,
+      focusActive: this.focusSession.phase !== "idle",
+      screenshotActive: this.screenshotActive,
+      dragActive: this.drag !== null,
+      pointerOverPet: this.pointerOverPet,
+      presentationActive:
+        this.flowPresentationMode !== null ||
+        this.externalPresentationMode !== null,
+      suppressionActive: time < this.cursorInteractionSuppressedUntil,
+    });
+  }
+
+  private syncCursorInteractionAvailability(time: number): boolean {
+    const allowed = this.cursorInteractionIsAllowed(time);
+    if (!allowed) {
+      if (!this.cursorInteractionBlocked) {
+        this.cursorInteractionBlocked = true;
+        this.invalidateCursorInteraction();
+      }
+      return false;
+    }
+    if (this.cursorInteractionBlocked) {
+      this.cursorInteractionBlocked = false;
+      this.cursorInteractionEpoch += 1;
+      this.lastCursorSampleAt = 0;
+      this.cursorInteraction = cancelCursorInteraction();
+      this.cursorInteractionAppliedPhase = "idle";
+    }
+    return true;
+  }
+
+  private updateCursorInteraction(time: number, dtSeconds: number): boolean {
+    const settings = this.settings;
+    if (!settings) {
+      return false;
+    }
+    const previousPhase = this.cursorInteraction.phase;
+    this.cursorInteraction = advanceCursorInteraction(this.cursorInteraction, {
+      time,
+      petPosition: this.position,
+      petWindowDimensions: this.petWindowDimensions,
+      activityArea: this.activityArea,
+      coordinateScale: this.coordinateScale(),
+    });
+    this.requestCursorSample(time);
+
+    const phase = this.cursorInteraction.phase;
+    if (phase !== this.cursorInteractionAppliedPhase) {
+      if (
+        phase === "observing" &&
+        this.cursorInteractionAppliedPhase === "chasing"
+      ) {
+        this.requestWindowMove(this.position, true);
+      }
+      if (phase === "cooldown") {
+        this.restUntil = time;
+        this.pickTarget();
+      }
+      this.cursorInteractionAppliedPhase = phase;
+    }
+
+    if (phase === "noticing") {
+      this.target = null;
+      this.faceLatestCursor();
+      this.mood = "idle";
+      return true;
+    }
+
+    if (phase === "chasing" && this.cursorInteraction.chaseTarget) {
+      this.target = null;
+      const speed =
+        cursorChaseSpeed(settings.activityLevel) * this.coordinateScale();
+      const next = moveTowards(
+        this.position,
+        this.cursorInteraction.chaseTarget,
+        speed * dtSeconds,
+      );
+      this.updateFacing(next.x - this.position.x);
+      this.position = clampPointToRect(
+        next,
+        this.activityArea,
+        this.petWindowDimensions,
+      );
+      this.mood = "run";
+      this.syncWindowPosition(time);
+      return true;
+    }
+
+    if (phase === "observing") {
+      this.target = null;
+      this.faceLatestCursor();
+      this.mood = "idle";
+      return true;
+    }
+
+    if (previousPhase === "cooldown" && phase === "idle") {
+      this.lastCursorSampleAt = 0;
+    }
+    return false;
+  }
+
+  private requestCursorSample(time: number): void {
+    if (
+      this.cursorSampleInFlight ||
+      this.cursorInteraction.phase === "observing" ||
+      this.cursorInteraction.phase === "cooldown" ||
+      time - this.lastCursorSampleAt < cursorInteractionCadence.sampleIntervalMs
+    ) {
+      return;
+    }
+    this.lastCursorSampleAt = time;
+    this.cursorSampleInFlight = true;
+    const epoch = this.cursorInteractionEpoch;
+    void invoke<WindowFramePayload>("get_pet_window_frame")
+      .then((frame) => {
+        const sampleTime = performance.now();
+        if (
+          epoch !== this.cursorInteractionEpoch ||
+          !this.cursorInteractionIsAllowed(sampleTime)
+        ) {
+          return;
+        }
+        this.cursorInteraction = sampleCursorInteraction(
+          advanceCursorInteraction(this.cursorInteraction, {
+            time: sampleTime,
+            petPosition: this.position,
+            petWindowDimensions: this.petWindowDimensions,
+            activityArea: this.activityArea,
+            coordinateScale: this.coordinateScale(),
+          }),
+          {
+            time: sampleTime,
+            cursor: frame.cursor,
+            petPosition: this.position,
+            petWindowDimensions: this.petWindowDimensions,
+            activityArea: this.activityArea,
+            coordinateScale: this.coordinateScale(),
+          },
+        );
+      })
+      .catch(() => {
+        // Cursor interaction is optional; ordinary movement continues if a probe fails.
+      })
+      .finally(() => {
+        this.cursorSampleInFlight = false;
+      });
+  }
+
+  private faceLatestCursor(): void {
+    const cursor = this.cursorInteraction.latestCursor;
+    if (!cursor) {
+      return;
+    }
+    const petCenterX = this.position.x + this.petWindowDimensions.width * 0.5;
+    this.updateFacing(cursor.x - petCenterX);
+  }
+
+  private suppressCursorInteraction(durationMs: number): void {
+    this.cursorInteractionSuppressedUntil = Math.max(
+      this.cursorInteractionSuppressedUntil,
+      performance.now() + durationMs,
+    );
+    this.invalidateCursorInteraction();
+  }
+
+  private invalidateCursorInteraction(): void {
+    this.cursorInteractionEpoch += 1;
+    this.cursorInteraction = cancelCursorInteraction();
+    this.cursorInteractionAppliedPhase = "idle";
   }
 
   private pickTarget(): void {
@@ -1280,6 +1481,7 @@ class PetController {
       return;
     }
     event.preventDefault();
+    this.suppressCursorInteraction(cursorInteractionCadence.pointerExitProtectionMs);
     if (this.flowPresentationMode || this.externalPresentationMode) {
       return;
     }
@@ -1390,8 +1592,12 @@ class PetController {
     const scale = Math.floor(Math.min(width, height) / grid);
     const offsetX = Math.floor((width - grid * scale) / 2);
     const offsetY = Math.floor((height - grid * scale) / 2);
+    const noticeOffset = Math.round(
+      cursorNoticeOffset(this.cursorInteraction, time) *
+        (window.devicePixelRatio || 1),
+    );
     ctx.save();
-    ctx.translate(offsetX, offsetY);
+    ctx.translate(offsetX, offsetY + noticeOffset);
     ctx.scale(scale, scale);
     this.skin.draw(ctx, this.mood, time, this.facing);
     ctx.restore();
