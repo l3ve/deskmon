@@ -6,6 +6,7 @@
 - `src/pet/focusDialog.ts`: 专注完成、休息中和休息完成对话框的文案、按钮、焦点与键盘交互。
 - `src/pet/focusPresentation.ts`: 中央宠物与对话框在多显示器可用工作区内的稳定布局计算。
 - `src/pet/activityCadence.ts`: 桌宠活动节奏策略，集中管理安静/标准/活泼的速度、run 概率、休息窗口、到达阈值和状态切换节奏常量。
+- `src/pet/cursorInteraction.ts`: 鼠标互动纯逻辑状态机，负责快速移动判定、注意、短追逐、观察、冷却、边界和阻塞规则。
 - `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
 - `src/pet/giantCelebration.ts`: 倒计时结束巨型庆祝动效的状态、分段时间和尺寸/位置插值。
 - `src/pet/externalNotificationState.ts`: 外部提醒文本规范化、Unicode 截断、去重、容量和停留时间规则。
@@ -31,6 +32,7 @@
 - `docs/prds/007-macos-region-screenshot.md`: macOS 区域截图 PRD，覆盖原生矩形框选、PNG 文件直存、保存目录设置、权限与失败反馈边界。
 - `docs/prds/008-screenshot-annotation-editor.md`: 区域截图标注编辑器 V1 PRD，覆盖强制编辑、五项工具、保存时落盘和关闭丢弃规则。
 - `docs/prds/009-local-pet-notification-cli.md`: 本地宠物提醒 CLI PRD，覆盖本机调用契约、中央 RPG 对话提醒、最多三条并发和 macOS CLI 安装边界。
+- `docs/prds/010-cursor-chase-interaction.md`: 鼠标追逐互动 PRD，覆盖快速移动触发、点击安全圈、短追逐、观察冷却和状态优先级边界。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -158,6 +160,14 @@
 - 拖拽和截图任务期间延迟外部提醒；专注中央交接期间外部对话放在未占用一侧并保持原按钮可用；用户隐藏宠物会立即中止并清空提醒。
 - 外部提醒不播放声音、不发送 macOS 系统通知、不持久化、不进入“记忆力”，也不迁移现有专注、截图或记忆力反馈。
 - 设置页“命令行工具”面板显式安装、更新或卸载 `/usr/local/bin/deskmon`，并就地展示状态和失败原因；菜单栏不放安装入口，同名非 Deskmon 命令不得覆盖或删除。
+- 鼠标追逐只在普通桌面状态响应附近的快速移动；外圈先做短暂意图判断，进入点击安全内圈或发生 pointer 交互时立即取消。
+- 单次追逐复用 `run`，短时间实时更新目标，约 1.2 秒或 200px 达上限后停住观察；观察后冷却 2 秒。
+- 鼠标互动状态应作为独立纯逻辑模块，控制器只负责采样、状态优先级、窗口移动和 mood 映射。
+- 暂停移动、专注/休息计时、拖拽、截图、巨型庆祝、外部提醒和其他临时展示期间禁用或中断追逐，不补播旧互动。
+- 鼠标追逐第一版静音，不新增设置、菜单、权限、sprite 或左键单击反馈；安静/标准/活泼只轻微影响追逐速度。
+- 鼠标位置复用 `get_pet_window_frame`，普通状态约每 100ms 采样；控制器用 epoch 丢弃状态切换前发出的异步旧采样。
+- 鼠标追逐首轮实机调校为 3.5 倍窗口宽外圈、90px/400ms 快速阈值、100ms 注意判断；点击安全内圈仍保持 1.2 倍窗口宽。
+- 注意动作只在 canvas 绘制时按设备缩放上抬最多 5 个逻辑像素，不改变原生窗口位置或用户设置。
 
 ## Known Issues
 
@@ -188,3 +198,4 @@
 - 不要让变量 value 参与搜索、菜单预览、系统确认文案、复制成功反馈或“记忆中”临时历史。
 - 不要重新提交未被 `bundle.icon` 引用的 `icon.png`、`Square*Logo.png`、`StoreLogo.png` 或 `src-tauri/icons/variants`。
 - 不要把带圆角背景的应用 icon 直接设置为 `icon_as_template(true)` 的菜单栏图标，否则 macOS 会按 alpha mask 渲染成白色方块。
+- 不要让鼠标追逐在点击安全内圈、pointer 交互、专注计时、截图或临时展示期间继续移动宠物。
