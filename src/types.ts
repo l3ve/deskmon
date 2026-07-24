@@ -1,22 +1,6 @@
 export type PetSize = "small" | "medium" | "large";
 export type ActivityLevel = "quiet" | "standard" | "lively";
 export type CliInstallationState = "notInstalled" | "installed" | "updatable" | "conflict";
-export type TimerKind = "focus" | "break";
-export type FocusSessionPhase =
-  | "idle"
-  | "focusRunning"
-  | "focusComplete"
-  | "breakRunning"
-  | "breakComplete";
-export type FocusSessionAction =
-  | "cancelRound"
-  | "startBreak"
-  | "extendFocus"
-  | "finishBreakEarly"
-  | "resumeFocus"
-  | "extendBreak"
-  | "endRound";
-
 export interface Point {
   x: number;
   y: number;
@@ -33,7 +17,7 @@ export interface Settings {
   petSize: PetSize;
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
-  focusTimer: FocusTimerPreferences;
+  countdown: CountdownPreferences;
   screenshot: ScreenshotPreferences;
   petVisible: boolean;
   movementPaused: boolean;
@@ -45,19 +29,15 @@ export interface ScreenshotPreferences {
   saveDirectory: string | null;
 }
 
-export interface FocusTimerPreferences {
-  focusMinutes: [number, number, number];
-  breakMinutes: number;
-  focusFinishedMessage: string;
-  breakFinishedMessage: string;
-  breakSoundEnabled: boolean;
+export interface CountdownPreferences {
+  minutes: number;
 }
 
 export interface UserPreferences {
   petSize: PetSize;
   activityLevel: ActivityLevel;
   alwaysOnTop: boolean;
-  focusTimer: FocusTimerPreferences;
+  countdown: CountdownPreferences;
   screenshot: ScreenshotPreferences;
   customActivityArea: Rect | null;
 }
@@ -70,15 +50,12 @@ export interface MonitorPayload {
   scaleFactor: number;
 }
 
-export interface FocusSessionSnapshot {
-  phase: FocusSessionPhase;
+export interface CountdownSnapshot {
   isRunning: boolean;
-  kind: TimerKind | null;
+  minutes: number | null;
   durationSeconds: number;
   remainingSeconds: number;
   endsAtMs: number | null;
-  baseFocusMinutes: number | null;
-  breakMinutes: number | null;
 }
 
 export interface BootstrapPayload {
@@ -89,7 +66,7 @@ export interface BootstrapPayload {
   petDimensions: Dimensions;
   petWindowDimensions: Dimensions;
   petPosition: Point;
-  focusSession: FocusSessionSnapshot;
+  countdown: CountdownSnapshot;
   screenshotDirectory: string;
   cliInstallationState: CliInstallationState;
 }
@@ -97,11 +74,6 @@ export interface BootstrapPayload {
 export interface WindowFramePayload {
   position: Point;
   size: Dimensions;
-  cursor: Point;
-}
-
-export interface FocusPresentationContext {
-  monitors: MonitorPayload[];
   cursor: Point;
 }
 

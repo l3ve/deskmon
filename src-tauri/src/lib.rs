@@ -1,16 +1,13 @@
+mod countdown;
 mod external_notification;
-mod focus_session;
 mod geometry;
 mod remember;
 mod screenshot;
 mod settings;
 
+use countdown::{Countdown, CountdownSnapshot};
 use external_notification::{
     CliInstallationState, ExternalNotificationRequest, NotificationDisposition,
-};
-use focus_session::{
-    CompletionFeedback, FocusSession, FocusSessionAction, FocusSessionConfig, FocusSessionPhase,
-    FocusSessionSnapshot, TimerKind, EXTRA_SEGMENT_MINUTES,
 };
 use geometry::{
     clamp_to_visible_work_area, collect_monitors, default_activity_area, initial_pet_position,
@@ -20,13 +17,12 @@ use geometry::{
 use screenshot::ScreenshotCoordinator;
 use serde::{Deserialize, Serialize};
 use settings::{
-    load_settings, normalize_focus_timer_preferences, normalize_screenshot_preferences,
-    save_settings, FocusTimerPreferences, ScreenshotPreferences, Settings, UserPreferences,
+    load_settings, normalize_countdown_preferences, normalize_screenshot_preferences,
+    save_settings, ScreenshotPreferences, Settings, UserPreferences,
 };
-#[cfg(target_os = "macos")]
-use std::process::Command;
 use std::{
     path::{Path, PathBuf},
+    process::Command,
     sync::Mutex,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -55,12 +51,10 @@ const TRAY_ID: &str = "deskmon-tray";
 const TRAY_ICON: &[u8] = include_bytes!("../assets/tray-icon.png");
 const TRAY_TIMER_STATUS_ID: &str = "tray_timer_status";
 const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
-const EXTERNAL_NOTIFICATION_EVENT: &str = "deskmon-external-notification";
+const PET_NOTIFICATION_EVENT: &str = "deskmon-pet-notification";
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
 const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
-#[cfg(target_os = "macos")]
-const TIMER_SYSTEM_SOUND_PATH: &str = "/System/Library/Sounds/Glass.aiff";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,7 +66,7 @@ struct BootstrapPayload {
     pet_dimensions: Dimensions,
     pet_window_dimensions: Dimensions,
     pet_position: Point,
-    focus_session: FocusSessionSnapshot,
+    countdown: CountdownSnapshot,
     screenshot_directory: String,
     cli_installation_state: CliInstallationState,
 }
@@ -82,13 +76,6 @@ struct BootstrapPayload {
 struct WindowFramePayload {
     position: Point,
     size: Dimensions,
-    cursor: Point,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FocusPresentationContext {
-    monitors: Vec<MonitorPayload>,
     cursor: Point,
 }
 
@@ -119,6 +106,21 @@ struct ScreenshotSaveError {
     directory_unavailable: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum PetNotificationTone {
+    Normal,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PetNotificationPayload {
+    title: Option<String>,
+    text: String,
+    tone: PetNotificationTone,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ScreenshotSelectionRect {
@@ -131,7 +133,7 @@ struct ScreenshotSelectionRect {
 #[derive(Default)]
 struct AppState {
     settings: Mutex<Settings>,
-    focus_session: Mutex<FocusSession>,
+    countdown: Mutex<Countdown>,
     remember: Mutex<remember::RememberState>,
     menu_items: Mutex<MenuItems>,
     last_position_saved_at_ms: Mutex<u64>,
@@ -173,10 +175,8 @@ fn get_bootstrap(
     let settings_snapshot = settings.clone();
     drop(settings);
 
-    let focus_session = focus_session_snapshot(&state);
-    if !focus_session.phase.uses_central_presentation() {
-        resize_and_place_pet_window(&app, position, pet_dimensions)?;
-    }
+    let countdown = countdown_snapshot(&state);
+    resize_and_place_pet_window(&app, position, pet_dimensions)?;
     save_settings(&app, &settings_snapshot)?;
 
     Ok(BootstrapPayload {
@@ -187,7 +187,7 @@ fn get_bootstrap(
         pet_dimensions,
         pet_window_dimensions,
         pet_position: position,
-        focus_session,
+        countdown,
         screenshot_directory: screenshot_directory.to_string_lossy().into_owned(),
         cli_installation_state: external_notification::cli_installation_state(),
     })
@@ -218,18 +218,6 @@ fn get_pet_window_frame(app: AppHandle) -> Result<WindowFramePayload, String> {
             width: size.width as f64,
             height: size.height as f64,
         },
-        cursor: Point {
-            x: cursor.x,
-            y: cursor.y,
-        },
-    })
-}
-
-#[tauri::command]
-fn get_focus_presentation_context(app: AppHandle) -> Result<FocusPresentationContext, String> {
-    let cursor = app.cursor_position().map_err(|err| err.to_string())?;
-    Ok(FocusPresentationContext {
-        monitors: collect_monitors(&app)?,
         cursor: Point {
             x: cursor.x,
             y: cursor.y,
@@ -357,29 +345,22 @@ fn save_user_preferences(
         settings.pet_size = preferences.pet_size;
         settings.activity_level = preferences.activity_level;
         settings.always_on_top = preferences.always_on_top;
-        settings.focus_timer = normalize_focus_timer_preferences(preferences.focus_timer)?;
+        settings.countdown = normalize_countdown_preferences(preferences.countdown)?;
         settings.screenshot = normalize_screenshot_preferences(preferences.screenshot);
         settings.custom_activity_area = normalized_area;
         save_settings(&app, &settings)?;
     }
 
-    let uses_central_presentation = state
-        .focus_session
-        .lock()
-        .map(|session| session.phase().uses_central_presentation())
-        .unwrap_or(false);
-    if !uses_central_presentation {
-        if let Some(window) = app.get_webview_window(PET_WINDOW) {
-            window
-                .set_always_on_top(preferences.always_on_top)
-                .map_err(|err| err.to_string())?;
-            window
-                .set_size(Size::Logical(LogicalSize::new(
-                    pet_dimensions.width,
-                    pet_dimensions.height,
-                )))
-                .map_err(|err| err.to_string())?;
-        }
+    if let Some(window) = app.get_webview_window(PET_WINDOW) {
+        window
+            .set_always_on_top(preferences.always_on_top)
+            .map_err(|err| err.to_string())?;
+        window
+            .set_size(Size::Logical(LogicalSize::new(
+                pet_dimensions.width,
+                pet_dimensions.height,
+            )))
+            .map_err(|err| err.to_string())?;
     }
     update_tray_menu(&app)?;
     let _ = app.emit("deskmon-settings-changed", ());
@@ -771,12 +752,12 @@ async fn save_screenshot_png(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "PNG 图片".into());
     finish_screenshot_task(&app, &coordinator);
-    let _ = app
-        .notification()
-        .builder()
-        .title("截图已保存")
-        .body(&filename)
-        .show();
+    let _ = dispatch_pet_notification(
+        &app,
+        Some("截图已保存".into()),
+        filename.clone(),
+        PetNotificationTone::Normal,
+    );
     Ok(ScreenshotSavePayload { filename })
 }
 
@@ -838,12 +819,12 @@ fn show_screenshot_permission_prompt(app: &AppHandle) {
 }
 
 fn show_screenshot_failure_notification(app: &AppHandle, message: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title("区域截图失败")
-        .body(message)
-        .show();
+    let _ = dispatch_pet_notification(
+        app,
+        Some("区域截图失败".into()),
+        message.into(),
+        PetNotificationTone::Error,
+    );
 }
 
 #[tauri::command]
@@ -902,7 +883,7 @@ fn remember_save_item(
 }
 
 fn remember_save_current_clipboard(app: &AppHandle, state: &tauri::State<'_, AppState>) {
-    let notification_body = match arboard::Clipboard::new()
+    let (notification_body, tone) = match arboard::Clipboard::new()
         .ok()
         .and_then(|mut clipboard| clipboard.get_text().ok())
         .and_then(|text| remember::normalize_text(&text))
@@ -912,7 +893,11 @@ fn remember_save_current_clipboard(app: &AppHandle, state: &tauri::State<'_, App
                 let mut remember_state = match state.remember.lock() {
                     Ok(remember_state) => remember_state,
                     Err(_) => {
-                        notify_remember(app, "Deskmon 暂时记不住这段文字");
+                        notify_remember(
+                            app,
+                            "Deskmon 暂时记不住这段文字",
+                            PetNotificationTone::Error,
+                        );
                         return;
                     }
                 };
@@ -925,18 +910,30 @@ fn remember_save_current_clipboard(app: &AppHandle, state: &tauri::State<'_, App
                 Ok(snapshot) => {
                     emit_remember_changed(app, &snapshot);
                     if truncated {
-                        format!("Deskmon 记住了前 {} 个字", remember::TEXT_LIMIT)
+                        (
+                            format!("Deskmon 记住了前 {} 个字", remember::TEXT_LIMIT),
+                            PetNotificationTone::Normal,
+                        )
                     } else {
-                        "Deskmon 记住刚想到的了".to_string()
+                        (
+                            "Deskmon 记住刚想到的了".to_string(),
+                            PetNotificationTone::Normal,
+                        )
                     }
                 }
-                Err(error) => remember_save_error_notification(&error).to_string(),
+                Err(error) => (
+                    remember_save_error_notification(&error).to_string(),
+                    PetNotificationTone::Error,
+                ),
             }
         }
-        None => "Deskmon 没看到能记住的文字".to_string(),
+        None => (
+            "Deskmon 没看到能记住的文字".to_string(),
+            PetNotificationTone::Error,
+        ),
     };
 
-    notify_remember(app, &notification_body);
+    notify_remember(app, &notification_body, tone);
 }
 
 fn remember_save_error_notification(error: &str) -> &'static str {
@@ -953,13 +950,8 @@ fn remember_save_error_notification(error: &str) -> &'static str {
     }
 }
 
-fn notify_remember(app: &AppHandle, body: &str) {
-    let _ = app
-        .notification()
-        .builder()
-        .title("Deskmon")
-        .body(body)
-        .show();
+fn notify_remember(app: &AppHandle, body: &str, tone: PetNotificationTone) {
+    let _ = dispatch_pet_notification(app, Some("Deskmon".into()), body.into(), tone);
 }
 
 #[tauri::command]
@@ -1351,155 +1343,102 @@ fn relocate_pet_to_activity_area(
         .map_err(|err| err.to_string())
 }
 
-#[tauri::command]
-fn focus_session_action(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    action: FocusSessionAction,
-) -> Result<FocusSessionSnapshot, String> {
-    perform_focus_session_action(&app, &state, action)
-}
-
-fn start_focus_round_inner(
+fn start_countdown_inner(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
-    minutes: u64,
-) -> Result<FocusSessionSnapshot, String> {
-    let preferences = state
+) -> Result<CountdownSnapshot, String> {
+    let minutes = state
         .settings
         .lock()
         .map_err(|_| "settings lock poisoned")?
-        .focus_timer
-        .clone();
-    let config = FocusSessionConfig {
-        base_focus_minutes: minutes,
-        break_minutes: preferences.break_minutes,
-        focus_finished_message: preferences.focus_finished_message,
-        break_finished_message: preferences.break_finished_message,
-        break_sound_enabled: preferences.break_sound_enabled,
-    };
-    let (changed, snapshot, segment_id) = {
-        let mut session = state
-            .focus_session
+        .countdown
+        .minutes;
+    let (countdown_id, snapshot) = {
+        let mut countdown = state
+            .countdown
             .lock()
-            .map_err(|_| "focus session lock poisoned")?;
-        let changed = session.start_round(config, now_ms());
-        (
-            changed,
-            session.snapshot(now_ms()),
-            session.active_segment_id(),
-        )
+            .map_err(|_| "countdown lock poisoned")?;
+        let countdown_id = countdown.start(minutes, now_ms());
+        (countdown_id, countdown.snapshot(now_ms()))
     };
-    if changed {
-        publish_focus_session_change(app, state, &snapshot)?;
-        if let Some(segment_id) = segment_id {
-            spawn_focus_timer_worker(app.clone(), segment_id);
-        }
+    if let Some(countdown_id) = countdown_id {
+        publish_countdown_change(app, state, &snapshot)?;
+        spawn_countdown_worker(app.clone(), countdown_id);
     }
     Ok(snapshot)
 }
 
-fn perform_focus_session_action(
+fn cancel_countdown_inner(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
-    action: FocusSessionAction,
-) -> Result<FocusSessionSnapshot, String> {
-    let (changed, snapshot, segment_id) = {
-        let mut session = state
-            .focus_session
+) -> Result<CountdownSnapshot, String> {
+    let (changed, snapshot) = {
+        let mut countdown = state
+            .countdown
             .lock()
-            .map_err(|_| "focus session lock poisoned")?;
-        let previous_segment_id = session.active_segment_id();
-        let changed = session.apply_action(action, now_ms());
-        let segment_id = session
-            .active_segment_id()
-            .filter(|segment_id| Some(*segment_id) != previous_segment_id);
-        (changed, session.snapshot(now_ms()), segment_id)
+            .map_err(|_| "countdown lock poisoned")?;
+        let changed = countdown.cancel();
+        (changed, countdown.snapshot(now_ms()))
     };
     if changed {
-        publish_focus_session_change(app, state, &snapshot)?;
-        if let Some(segment_id) = segment_id {
-            spawn_focus_timer_worker(app.clone(), segment_id);
-        }
+        publish_countdown_change(app, state, &snapshot)?;
     }
     Ok(snapshot)
 }
 
-fn publish_focus_session_change(
+fn publish_countdown_change(
     app: &AppHandle,
     state: &tauri::State<'_, AppState>,
-    snapshot: &FocusSessionSnapshot,
+    snapshot: &CountdownSnapshot,
 ) -> Result<(), String> {
     clear_timer_menu_items(state);
     update_tray_menu(app)?;
-    app.emit("deskmon-focus-session-changed", snapshot)
+    app.emit("deskmon-countdown-changed", snapshot)
         .map_err(|err| err.to_string())
 }
 
-fn spawn_focus_timer_worker(app: AppHandle, segment_id: u64) {
+fn spawn_countdown_worker(app: AppHandle, countdown_id: u64) {
     thread::spawn(move || loop {
         thread::sleep(Duration::from_secs(1));
         let Some(state) = app.try_state::<AppState>() else {
             break;
         };
         let snapshot = {
-            let session = match state.focus_session.lock() {
-                Ok(session) => session,
+            let countdown = match state.countdown.lock() {
+                Ok(countdown) => countdown,
                 Err(_) => break,
             };
-            if session.active_segment_id() != Some(segment_id) {
+            if countdown.active_id() != Some(countdown_id) {
                 break;
             }
-            session.snapshot(now_ms())
+            countdown.snapshot(now_ms())
         };
 
         if snapshot.remaining_seconds > 0 {
             let _ = update_timer_menu_text(&app, &snapshot);
-            let _ = app.emit("deskmon-focus-session-changed", &snapshot);
+            let _ = app.emit("deskmon-countdown-changed", &snapshot);
             continue;
         }
 
-        let (feedback, completed_snapshot) = {
-            let mut session = match state.focus_session.lock() {
-                Ok(session) => session,
+        let (completed_minutes, completed_snapshot) = {
+            let mut countdown = match state.countdown.lock() {
+                Ok(countdown) => countdown,
                 Err(_) => break,
             };
-            let feedback = session.complete_segment(segment_id);
-            (feedback, session.snapshot(now_ms()))
+            let minutes = countdown.complete(countdown_id);
+            (minutes, countdown.snapshot(now_ms()))
         };
-        if let Some(feedback) = feedback {
-            let _ = publish_focus_session_change(&app, &state, &completed_snapshot);
-            let _ = show_timer_finished_notification(&app, &feedback);
-            play_timer_finished_sound(&feedback);
-            let _ = app.emit("deskmon-focus-segment-finished", feedback.kind);
+        if let Some(minutes) = completed_minutes {
+            let _ = publish_countdown_change(&app, &state, &completed_snapshot);
+            let _ = dispatch_pet_notification(
+                &app,
+                Some("Deskmon".into()),
+                format!("{minutes} 分钟倒计时结束啦"),
+                PetNotificationTone::Normal,
+            );
         }
         break;
     });
-}
-
-fn show_timer_finished_notification(
-    app: &AppHandle,
-    feedback: &CompletionFeedback,
-) -> Result<(), String> {
-    app.notification()
-        .builder()
-        .title("Deskmon")
-        .body(feedback.message.clone())
-        .show()
-        .map_err(|err| err.to_string())
-}
-
-fn play_timer_finished_sound(feedback: &CompletionFeedback) {
-    if !feedback.play_sound {
-        return;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        thread::spawn(|| {
-            let _ = Command::new("afplay").arg(TIMER_SYSTEM_SOUND_PATH).status();
-        });
-    }
 }
 
 fn spawn_clipboard_worker(app: AppHandle) {
@@ -1625,7 +1564,11 @@ fn remember_copy_variable_inner(
     if cleanup_enabled {
         spawn_variable_clipboard_cleanup(app.clone(), value);
     }
-    notify_remember(app, &format!("已复制变量“{key}”"));
+    notify_remember(
+        app,
+        &format!("已复制变量“{key}”"),
+        PetNotificationTone::Normal,
+    );
     Ok(snapshot)
 }
 
@@ -1758,7 +1701,7 @@ fn build_tray_menu(
         .lock()
         .map_err(|_| "settings lock poisoned")?
         .clone();
-    let focus_session = focus_session_snapshot(state);
+    let countdown = countdown_snapshot(state);
     let visibility_label = if settings.pet_visible {
         "隐藏宠物"
     } else {
@@ -1770,78 +1713,29 @@ fn build_tray_menu(
         "暂停移动"
     };
 
-    let mut builder = MenuBuilder::new(app);
-    if !focus_session.phase.uses_central_presentation() {
-        builder = builder
-            .text("toggle_pet", visibility_label)
-            .text("toggle_pause", pause_label)
-            .text("relocate_pet", "移回活动区域");
-    }
+    let mut builder = MenuBuilder::new(app)
+        .text("toggle_pet", visibility_label)
+        .text("toggle_pause", pause_label)
+        .text("relocate_pet", "移回活动区域");
 
-    builder = match focus_session.phase {
-        FocusSessionPhase::Idle => {
-            remember_tray_timer_status(state, None)?;
-            builder.item(&build_focus_submenu(app, &settings.focus_timer)?)
-        }
-        FocusSessionPhase::FocusRunning | FocusSessionPhase::BreakRunning => {
-            let status = MenuItem::with_id(
-                app,
-                TRAY_TIMER_STATUS_ID,
-                timer_status_label(&focus_session),
-                false,
-                None::<&str>,
-            )
-            .map_err(|err| err.to_string())?;
-            remember_tray_timer_status(state, Some(status.clone()))?;
-            if focus_session.phase == FocusSessionPhase::FocusRunning {
-                builder.item(&status).text("focus_cancel_round", "取消本轮")
-            } else {
-                builder
-                    .item(&status)
-                    .text("focus_finish_break_early", "提前结束休息")
-                    .separator()
-                    .text("end_round_and_hide", "结束本轮并隐藏宠物")
-            }
-        }
-        FocusSessionPhase::FocusComplete => {
-            remember_tray_timer_status(state, None)?;
-            builder
-                .text(
-                    "focus_start_break",
-                    format!(
-                        "休息 {} 分钟",
-                        focus_session
-                            .break_minutes
-                            .unwrap_or(settings.focus_timer.break_minutes)
-                    ),
-                )
-                .text(
-                    "focus_extend_focus",
-                    format!("再专注 {EXTRA_SEGMENT_MINUTES} 分钟"),
-                )
-                .text("focus_end_round", "结束本轮")
-                .separator()
-                .text("end_round_and_hide", "结束本轮并隐藏宠物")
-        }
-        FocusSessionPhase::BreakComplete => {
-            remember_tray_timer_status(state, None)?;
-            builder
-                .text(
-                    "focus_resume",
-                    format!(
-                        "继续专注 {} 分钟",
-                        focus_session.base_focus_minutes.unwrap_or(25)
-                    ),
-                )
-                .text(
-                    "focus_extend_break",
-                    format!("再休息 {EXTRA_SEGMENT_MINUTES} 分钟"),
-                )
-                .text("focus_end_round", "结束本轮")
-                .separator()
-                .text("end_round_and_hide", "结束本轮并隐藏宠物")
-        }
-    };
+    if countdown.is_running {
+        let status = MenuItem::with_id(
+            app,
+            TRAY_TIMER_STATUS_ID,
+            timer_status_label(&countdown),
+            false,
+            None::<&str>,
+        )
+        .map_err(|err| err.to_string())?;
+        remember_tray_timer_status(state, Some(status.clone()))?;
+        builder = builder.item(&status).text("cancel_countdown", "取消倒计时");
+    } else {
+        remember_tray_timer_status(state, None)?;
+        builder = builder.text(
+            "start_countdown",
+            format!("{} 分钟倒计时", settings.countdown.minutes),
+        );
+    }
 
     builder = builder
         .separator()
@@ -1864,7 +1758,7 @@ fn build_pet_menu(
         .lock()
         .map_err(|_| "settings lock poisoned")?
         .clone();
-    let focus_session = focus_session_snapshot(state);
+    let countdown = countdown_snapshot(state);
     let pause_label = if settings.movement_paused {
         "恢复移动"
     } else {
@@ -1872,99 +1766,36 @@ fn build_pet_menu(
     };
 
     let mut builder = MenuBuilder::new(app);
-
-    builder = match focus_session.phase {
-        FocusSessionPhase::Idle => {
-            remember_pet_timer_status(state, None)?;
-            builder
-                .item(&build_focus_submenu(app, &settings.focus_timer)?)
-                .separator()
-        }
-        FocusSessionPhase::FocusRunning | FocusSessionPhase::BreakRunning => {
-            let status = MenuItem::with_id(
-                app,
-                PET_TIMER_STATUS_ID,
-                timer_status_label(&focus_session),
-                false,
-                None::<&str>,
+    if countdown.is_running {
+        let status = MenuItem::with_id(
+            app,
+            PET_TIMER_STATUS_ID,
+            timer_status_label(&countdown),
+            false,
+            None::<&str>,
+        )
+        .map_err(|err| err.to_string())?;
+        remember_pet_timer_status(state, Some(status.clone()))?;
+        builder = builder
+            .item(&status)
+            .text("cancel_countdown", "取消倒计时")
+            .separator();
+    } else {
+        remember_pet_timer_status(state, None)?;
+        builder = builder
+            .text(
+                "start_countdown",
+                format!("{} 分钟倒计时", settings.countdown.minutes),
             )
-            .map_err(|err| err.to_string())?;
-            remember_pet_timer_status(state, Some(status.clone()))?;
-            if focus_session.phase == FocusSessionPhase::FocusRunning {
-                builder
-                    .item(&status)
-                    .text("focus_cancel_round", "取消本轮")
-                    .separator()
-            } else {
-                builder
-                    .item(&status)
-                    .text("focus_finish_break_early", "提前结束休息")
-                    .text("end_round_and_hide", "结束本轮并隐藏宠物")
-                    .separator()
-            }
-        }
-        FocusSessionPhase::FocusComplete => {
-            remember_pet_timer_status(state, None)?;
-            builder
-                .text(
-                    "focus_start_break",
-                    format!(
-                        "休息 {} 分钟",
-                        focus_session
-                            .break_minutes
-                            .unwrap_or(settings.focus_timer.break_minutes)
-                    ),
-                )
-                .text(
-                    "focus_extend_focus",
-                    format!("再专注 {EXTRA_SEGMENT_MINUTES} 分钟"),
-                )
-                .text("focus_end_round", "结束本轮")
-                .text("end_round_and_hide", "结束本轮并隐藏宠物")
-                .separator()
-        }
-        FocusSessionPhase::BreakComplete => {
-            remember_pet_timer_status(state, None)?;
-            builder
-                .text(
-                    "focus_resume",
-                    format!(
-                        "继续专注 {} 分钟",
-                        focus_session.base_focus_minutes.unwrap_or(25)
-                    ),
-                )
-                .text(
-                    "focus_extend_break",
-                    format!("再休息 {EXTRA_SEGMENT_MINUTES} 分钟"),
-                )
-                .text("focus_end_round", "结束本轮")
-                .text("end_round_and_hide", "结束本轮并隐藏宠物")
-                .separator()
-        }
-    };
+            .separator();
+    }
 
     builder = builder.text("region_screenshot", "区域截图").separator();
     let remember_submenu = build_remember_reset_submenu(app, state)?;
     builder = builder.item(&remember_submenu).separator();
-    if !focus_session.phase.uses_central_presentation() {
-        builder = builder
-            .text("toggle_pause", pause_label)
-            .text("hide_pet", "隐藏");
-    }
-    builder.build().map_err(|err| err.to_string())
-}
-
-fn build_focus_submenu(
-    app: &AppHandle,
-    focus_timer: &FocusTimerPreferences,
-) -> Result<Submenu<tauri::Wry>, String> {
-    let mut builder = SubmenuBuilder::new(app, "专注计时");
-    for (index, minutes) in focus_timer.focus_minutes.iter().enumerate() {
-        builder = builder.text(
-            format!("start_focus_timer_{index}"),
-            format!("专注 {minutes} 分钟"),
-        );
-    }
+    builder = builder
+        .text("toggle_pause", pause_label)
+        .text("hide_pet", "隐藏");
     builder.build().map_err(|err| err.to_string())
 }
 
@@ -2047,16 +1878,8 @@ fn build_remember_variable_submenu(
     builder.build().map_err(|err| err.to_string())
 }
 
-fn timer_status_label(focus_session: &FocusSessionSnapshot) -> String {
-    let label = match focus_session.kind {
-        Some(TimerKind::Focus) => "专注中",
-        Some(TimerKind::Break) => "休息中",
-        None => "计时中",
-    };
-    format!(
-        "{label}：还剩 {}",
-        format_remaining(focus_session.remaining_seconds)
-    )
+fn timer_status_label(countdown: &CountdownSnapshot) -> String {
+    format!("倒计时：{}", format_remaining(countdown.remaining_seconds))
 }
 
 fn remember_tray_timer_status(
@@ -2090,10 +1913,7 @@ fn clear_timer_menu_items(state: &tauri::State<'_, AppState>) {
     }
 }
 
-fn update_timer_menu_text(
-    app: &AppHandle,
-    focus_session: &FocusSessionSnapshot,
-) -> Result<(), String> {
+fn update_timer_menu_text(app: &AppHandle, countdown: &CountdownSnapshot) -> Result<(), String> {
     let Some(state) = app.try_state::<AppState>() else {
         return Ok(());
     };
@@ -2107,7 +1927,7 @@ fn update_timer_menu_text(
             items.pet_timer_status.clone(),
         )
     };
-    let label = timer_status_label(focus_session);
+    let label = timer_status_label(countdown);
     if let Some(item) = tray_item {
         item.set_text(&label).map_err(|err| err.to_string())?;
     }
@@ -2136,19 +1956,6 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     if let Some(id) = event_id.strip_prefix("remember_variable_") {
         if id != "empty" {
             let _ = remember_copy_variable_inner(app, &state, id);
-        }
-        return;
-    }
-    if let Some(index) = event_id.strip_prefix("start_focus_timer_") {
-        if let Ok(index) = index.parse::<usize>() {
-            let minutes = state
-                .settings
-                .lock()
-                .ok()
-                .and_then(|settings| settings.focus_timer.focus_minutes.get(index).copied());
-            if let Some(minutes) = minutes {
-                let _ = start_focus_round_inner(app, &state, minutes);
-            }
         }
         return;
     }
@@ -2197,30 +2004,11 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         "quit" => {
             app.exit(0);
         }
-        "focus_cancel_round" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::CancelRound);
+        "start_countdown" => {
+            let _ = start_countdown_inner(app, &state);
         }
-        "focus_start_break" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::StartBreak);
-        }
-        "focus_extend_focus" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ExtendFocus);
-        }
-        "focus_finish_break_early" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::FinishBreakEarly);
-        }
-        "focus_resume" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ResumeFocus);
-        }
-        "focus_extend_break" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::ExtendBreak);
-        }
-        "focus_end_round" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::EndRound);
-        }
-        "end_round_and_hide" => {
-            let _ = perform_focus_session_action(app, &state, FocusSessionAction::EndRound);
-            let _ = set_pet_visible_inner(app, &state, false);
+        "cancel_countdown" => {
+            let _ = cancel_countdown_inner(app, &state);
         }
         _ => {}
     }
@@ -2255,12 +2043,12 @@ fn move_pet_window_to(app: &AppHandle, position: Point) -> Result<(), String> {
     Ok(())
 }
 
-fn focus_session_snapshot(state: &tauri::State<'_, AppState>) -> FocusSessionSnapshot {
+fn countdown_snapshot(state: &tauri::State<'_, AppState>) -> CountdownSnapshot {
     state
-        .focus_session
+        .countdown
         .lock()
-        .map(|session| session.snapshot(now_ms()))
-        .unwrap_or_else(|_| FocusSession::default().snapshot(now_ms()))
+        .map(|countdown| countdown.snapshot(now_ms()))
+        .unwrap_or_else(|_| Countdown::default().snapshot(now_ms()))
 }
 
 fn format_remaining(seconds: u64) -> String {
@@ -2283,6 +2071,21 @@ fn publish_external_notification(
     if request.text.trim().is_empty() {
         return Ok(NotificationDisposition::Ignored);
     }
+    dispatch_pet_notification(
+        app,
+        request.title,
+        request.text,
+        PetNotificationTone::Normal,
+    )?;
+    Ok(NotificationDisposition::Accepted)
+}
+
+fn dispatch_pet_notification(
+    app: &AppHandle,
+    title: Option<String>,
+    text: String,
+    tone: PetNotificationTone,
+) -> Result<(), String> {
     let state = app
         .try_state::<AppState>()
         .ok_or("app state is not available")?;
@@ -2292,14 +2095,24 @@ fn publish_external_notification(
         .map_err(|_| "settings lock poisoned")?
         .pet_visible;
     if !visible {
-        return Ok(NotificationDisposition::Ignored);
+        return app
+            .notification()
+            .builder()
+            .title(title.clone().unwrap_or_else(|| "Deskmon".into()))
+            .body(text)
+            .show()
+            .map_err(|error| error.to_string());
     }
     if app.get_webview_window(PET_WINDOW).is_none() {
         return Err("pet window is not available".into());
     }
-    app.emit_to(PET_WINDOW, EXTERNAL_NOTIFICATION_EVENT, request)
-        .map_err(|error| error.to_string())?;
-    Ok(NotificationDisposition::Accepted)
+    app.emit_to(
+        PET_WINDOW,
+        PET_NOTIFICATION_EVENT,
+        PetNotificationPayload { title, text, tone },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2383,7 +2196,6 @@ pub fn run() {
             get_bootstrap,
             get_desktop_snapshot,
             get_pet_window_frame,
-            get_focus_presentation_context,
             move_pet_window,
             set_pet_temporary_presentation,
             persist_pet_position,
@@ -2398,7 +2210,6 @@ pub fn run() {
             repair_screenshot_directory,
             cancel_screenshot_task,
             show_pet_menu,
-            focus_session_action,
             get_remember_snapshot,
             open_remember,
             remember_reset_clipboard,
@@ -2424,25 +2235,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn timer_status_label_matches_focus_and_break_modes() {
-        let focus = FocusSessionSnapshot {
-            phase: FocusSessionPhase::FocusRunning,
+    fn timer_status_label_matches_countdown_format() {
+        let countdown = CountdownSnapshot {
             is_running: true,
-            kind: Some(TimerKind::Focus),
+            minutes: Some(30),
             duration_seconds: 1500,
             remaining_seconds: 754,
             ends_at_ms: Some(1),
-            base_focus_minutes: Some(25),
-            break_minutes: Some(5),
         };
-        assert_eq!(timer_status_label(&focus), "专注中：还剩 12:34");
-
-        let break_timer = FocusSessionSnapshot {
-            phase: FocusSessionPhase::BreakRunning,
-            kind: Some(TimerKind::Break),
-            remaining_seconds: 62,
-            ..focus
-        };
-        assert_eq!(timer_status_label(&break_timer), "休息中：还剩 01:02");
+        assert_eq!(timer_status_label(&countdown), "倒计时：12:34");
     }
 }

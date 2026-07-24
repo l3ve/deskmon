@@ -1,12 +1,16 @@
+export type PetNotificationTone = "normal" | "error";
+
 export interface ExternalNotificationPayload {
   title: string | null;
   text: string;
+  tone: PetNotificationTone;
 }
 
 export interface ExternalNotificationItem {
   id: number;
   title: string | null;
   text: string;
+  tone: PetNotificationTone;
   count: number;
   lastReceivedAt: number;
   revealedAt: number | null;
@@ -17,7 +21,7 @@ export interface ExternalNotificationState {
   nextId: number;
   presenting: boolean;
   expiresAt: number | null;
-  lastDurationMs: number;
+  pausedAt: number | null;
 }
 
 interface EnqueueResult {
@@ -37,12 +41,12 @@ interface SegmenterConstructor {
   new (locales?: string | string[], options?: { granularity: "grapheme" }): SegmenterLike;
 }
 
-const titleLimit = 10;
-const bodyLimit = 50;
+const titleLimit = 24;
+const bodyLimit = 120;
 const duplicateWindowMs = 10_000;
-const maxItems = 3;
+const maxItems = 20;
+const maxVisibleLayers = 4;
 const typewriterIntervalMs = 28;
-const notificationDurationMs = 3000;
 
 export function createExternalNotificationState(): ExternalNotificationState {
   return {
@@ -50,7 +54,7 @@ export function createExternalNotificationState(): ExternalNotificationState {
     nextId: 1,
     presenting: false,
     expiresAt: null,
-    lastDurationMs: notificationDurationMs,
+    pausedAt: null,
   };
 }
 
@@ -59,7 +63,7 @@ export function normalizeExternalNotification(
 ): ExternalNotificationPayload | null {
   const title = truncateGraphemes(normalizeInline(payload.title ?? ""), titleLimit) || null;
   const text = truncateGraphemes(normalizeBody(payload.text), bodyLimit);
-  return text ? { title, text } : null;
+  return text ? { title, text, tone: payload.tone === "error" ? "error" : "normal" } : null;
 }
 
 export function enqueueExternalNotification(
@@ -72,52 +76,49 @@ export function enqueueExternalNotification(
     return { state, accepted: false };
   }
 
-  const duration = externalNotificationDurationMs(normalized.text);
   const duplicateIndex = state.items.findIndex(
     (item) =>
       item.title === normalized.title &&
       item.text === normalized.text &&
+      item.tone === normalized.tone &&
       now - item.lastReceivedAt <= duplicateWindowMs,
   );
-  let items: ExternalNotificationItem[];
+  let items = [...state.items];
   let nextId = state.nextId;
   if (duplicateIndex >= 0) {
-    items = state.items.map((item, index) =>
-      index === duplicateIndex
-        ? {
-            ...item,
-            count: Math.min(100, item.count + 1),
-            lastReceivedAt: now,
-            revealedAt: state.presenting ? (item.revealedAt ?? now) : null,
-          }
-        : item,
-    );
+    items[duplicateIndex] = {
+      ...items[duplicateIndex]!,
+      count: Math.min(100, items[duplicateIndex]!.count + 1),
+      lastReceivedAt: now,
+    };
   } else {
-    items = [
-      ...state.items,
-      {
-        id: nextId,
-        title: normalized.title,
-        text: normalized.text,
-        count: 1,
-        lastReceivedAt: now,
-        revealedAt: state.presenting ? now : null,
-      },
-    ];
+    items.push({
+      id: nextId,
+      title: normalized.title,
+      text: normalized.text,
+      tone: normalized.tone,
+      count: 1,
+      lastReceivedAt: now,
+      revealedAt: null,
+    });
     nextId += 1;
     if (items.length > maxItems) {
-      items = items.slice(items.length - maxItems);
+      items.splice(state.presenting ? 1 : 0, items.length - maxItems);
     }
   }
 
   return {
     accepted: true,
     state: {
+      ...state,
       items,
       nextId,
-      presenting: state.presenting,
-      expiresAt: state.presenting ? now + duration : null,
-      lastDurationMs: duration,
+      expiresAt:
+        duplicateIndex === 0 && state.presenting
+          ? now + externalNotificationDurationMs(items[0]!.tone)
+          : state.expiresAt,
+      pausedAt:
+        duplicateIndex === 0 && state.pausedAt !== null ? now : state.pausedAt,
     },
   };
 }
@@ -126,48 +127,109 @@ export function startExternalNotifications(
   state: ExternalNotificationState,
   now: number,
 ): ExternalNotificationState {
-  if (state.items.length === 0) {
+  const current = state.items[0];
+  if (!current || state.presenting) {
     return state;
   }
   return {
     ...state,
-    items: state.items.map((item) => ({
-      ...item,
-      revealedAt: item.revealedAt ?? now,
-    })),
+    items: [{ ...current, revealedAt: now }, ...state.items.slice(1)],
     presenting: true,
-    expiresAt: now + state.lastDurationMs,
+    expiresAt: now + externalNotificationDurationMs(current.tone),
+    pausedAt: null,
   };
 }
 
 export function pauseExternalNotifications(
   state: ExternalNotificationState,
+  now: number,
 ): ExternalNotificationState {
-  if (!state.presenting) {
+  if (!state.presenting || state.pausedAt !== null) {
+    return state;
+  }
+  return { ...state, pausedAt: now };
+}
+
+export function resumeExternalNotifications(
+  state: ExternalNotificationState,
+  now: number,
+): ExternalNotificationState {
+  if (state.pausedAt === null) {
+    return state;
+  }
+  const pausedFor = Math.max(0, now - state.pausedAt);
+  const current = state.items[0];
+  return {
+    ...state,
+    items: current
+      ? [
+          {
+            ...current,
+            revealedAt:
+              current.revealedAt === null ? now : current.revealedAt + pausedFor,
+          },
+          ...state.items.slice(1),
+        ]
+      : state.items,
+    expiresAt: state.expiresAt === null ? null : state.expiresAt + pausedFor,
+    pausedAt: null,
+  };
+}
+
+export function completeExternalNotificationReveal(
+  state: ExternalNotificationState,
+): ExternalNotificationState {
+  const current = state.items[0];
+  if (!current) {
     return state;
   }
   return {
     ...state,
-    items: state.items.map((item) => ({ ...item, revealedAt: null })),
-    presenting: false,
-    expiresAt: null,
+    items: [{ ...current, revealedAt: Number.NEGATIVE_INFINITY }, ...state.items.slice(1)],
+  };
+}
+
+export function advanceExternalNotification(
+  state: ExternalNotificationState,
+  now: number,
+): ExternalNotificationState {
+  const items = state.items.slice(1);
+  if (items.length === 0) {
+    return { ...state, items, presenting: false, expiresAt: null, pausedAt: null };
+  }
+  const current = { ...items[0]!, revealedAt: now };
+  return {
+    ...state,
+    items: [current, ...items.slice(1)],
+    presenting: true,
+    expiresAt: now + externalNotificationDurationMs(current.tone),
+    pausedAt: null,
   };
 }
 
 export function clearExternalNotifications(
   state: ExternalNotificationState,
 ): ExternalNotificationState {
-  return {
-    ...createExternalNotificationState(),
-    nextId: state.nextId,
-  };
+  return { ...createExternalNotificationState(), nextId: state.nextId };
 }
 
 export function externalNotificationsExpired(
   state: ExternalNotificationState,
   now: number,
 ): boolean {
-  return state.presenting && state.expiresAt !== null && now >= state.expiresAt;
+  return (
+    state.presenting &&
+    state.pausedAt === null &&
+    state.expiresAt !== null &&
+    now >= state.expiresAt
+  );
+}
+
+export function externalNotificationRevealComplete(
+  item: ExternalNotificationItem,
+  now: number,
+): boolean {
+  return visibleExternalNotificationText(item, now) === item.text;
 }
 
 export function visibleExternalNotificationText(
@@ -192,8 +254,12 @@ export function externalNotificationCountLabel(count: number): string {
   return count >= 100 ? "×99+" : `×${count}`;
 }
 
-export function externalNotificationDurationMs(_text: string): number {
-  return notificationDurationMs;
+export function externalNotificationLayerCount(state: ExternalNotificationState): number {
+  return Math.min(maxVisibleLayers, state.items.length);
+}
+
+export function externalNotificationDurationMs(tone: PetNotificationTone): number {
+  return tone === "error" ? 8000 : 4000;
 }
 
 function normalizeInline(value: string): string {
@@ -206,10 +272,7 @@ function normalizeBody(value: string): string {
     .split(/\n+/gu)
     .map((paragraph) => paragraph.replace(/[^\S\n]+/gu, " ").trim())
     .filter(Boolean);
-  if (paragraphs.length <= 3) {
-    return paragraphs.join("\n");
-  }
-  return [paragraphs[0], paragraphs[1], paragraphs.slice(2).join(" ")].join("\n");
+  return paragraphs.slice(0, 3).join("\n");
 }
 
 function truncateGraphemes(value: string, limit: number): string {
