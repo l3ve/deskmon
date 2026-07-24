@@ -1,12 +1,13 @@
 # PRD：Deskmon 记忆力变量库
 
-状态：需求已通过 grill-me 收敛，待实现拆分
+状态：已实现
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-06
-最后更新：2026-07-06
+最后更新：2026-07-24
 发布状态：已发布到 GitHub issue #3：https://github.com/l3ve/deskmon/issues/3
+当前关系：变量隐私、搜索和剪贴板自动清理规则继续有效；可见宠物时的结果反馈由 PRD 011 统一。
 
-## Problem Statement
+## 问题陈述
 
 用户已经可以通过“记忆力”找回剪贴板历史，也可以把复制过的文本主动保存到“笔记本”。但有一类常用内容并不是从剪贴板自然产生的：密码、token、环境变量、邮箱、地址、命令参数、账号标识等。用户经常需要重复输入这些内容，希望能提前手动保存，并在需要时从 Deskmon 里快速取出。
 
@@ -14,7 +15,7 @@
 
 这个能力仍然应该保持 Deskmon 的轻量边界：它是“记忆力”的一个取用分组，不是完整密码管理器，不做自动填充、浏览器集成、云同步或强安全承诺。
 
-## Solution
+## 解决方案
 
 在“记忆力”中新增一个独立的“变量”分组。变量由用户在“记忆力”窗口里手动创建和维护，每条变量包含唯一 key、私密 value 和可选 note。变量库和“笔记本”分开建模，但共用现有的本地加密基础设施，确保 key/value/note 不以明文落盘。
 
@@ -26,7 +27,7 @@
 
 “记忆力”窗口新增搜索能力。搜索覆盖“记忆中”“笔记本”“变量”，但变量只搜索 key 和 note，不搜索 value。搜索结果仍按来源分组展示，不混成一条平铺列表。宠物小菜单保持轻量，V1 不做搜索。
 
-## User Stories
+## 用户故事
 
 1. As a macOS user, I want to manually save common variables, so that I do not need to copy them first before Deskmon can remember them.
 2. As a macOS user, I want variables to use key/value pairs, so that I can identify a private value without exposing it.
@@ -84,7 +85,7 @@
 54. As a developer, I want explicit commands for create/edit/delete/copy variable, so that permissions and validation stay clear.
 55. As a developer, I want smoke tests for the window and menu behavior, so that private values are not accidentally shown during future UI changes.
 
-## Implementation Decisions
+## 实现决策
 
 - 变量库是“记忆力”的第三个分组，和“记忆中”“笔记本”并列展示。
 - 变量库和笔记本分开建模；变量不是一种特殊笔记本条目。
@@ -146,7 +147,7 @@
 - 回忆菜单模块：负责宠物小菜单“回忆”的三分组结构、变量 key 展示和事件映射。
 - 记忆力窗口模块：负责搜索、变量分组、变量表单、value 临时显隐、删除确认后的交互状态。
 
-## Testing Decisions
+## 测试决策
 
 - 测试应验证外部行为和模块契约，不测试私有实现细节。
 - 记忆力状态测试应覆盖变量 key trim、必填、唯一性、允许字符、重复 key 失败。
@@ -174,7 +175,7 @@
 - 窗口 smoke test 应覆盖全局自动清理开关开启和关闭的基本行为。
 - 当前前端没有专用测试框架时，前端交互先写入 QA checklist；实现中优先保证 Rust 状态、存储和清理逻辑测试。
 
-## Out of Scope
+## 不在范围内
 
 - 自动粘贴到当前应用。
 - 监听 Cmd+V。
@@ -196,7 +197,7 @@
 - 审计日志、查看记录或复制记录。
 - 强安全承诺或抵抗攻击者同时获取 key 文件和加密数据文件的场景。
 
-## Further Notes
+## 进一步说明
 
 - 这个 PRD 是 002“记忆力剪贴板历史”的后续增强，不改变 001 桌宠 V1 的边界。
 - “回忆”是统一取出口；“记忆中”“笔记本”“变量”是来源和管理方式的分组。

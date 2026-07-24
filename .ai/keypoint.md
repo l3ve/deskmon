@@ -30,7 +30,10 @@
 - `docs/prds/008-screenshot-annotation-editor.md`: 区域截图标注编辑器 V1 PRD，覆盖强制编辑、五项工具、保存时落盘和关闭丢弃规则。
 - `docs/prds/009-local-pet-notification-cli.md`: 本地宠物提醒 CLI PRD，覆盖本机调用契约、中央 RPG 对话提醒、最多三条并发和 macOS CLI 安装边界。
 - `docs/prds/010-cursor-chase-interaction.md`: 鼠标追逐互动 PRD，覆盖快速移动触发、点击安全圈、短追逐、观察冷却和状态优先级边界。
-- `docs/prds/011-unified-pet-dialog-notifications.md`: 统一宠物对话提醒与单次倒计时 PRD，首轮实现已完成，待 macOS 实机验收。
+- `docs/prds/011-unified-pet-dialog-notifications.md`: 当前提醒、消息队列、通知路由与单次倒计时的权威 PRD，已实现并合并。
+- `docs/README.md`: 文档总入口，区分当前事实、需求、设计、QA、想法和工程记录。
+- `docs/prds/README.md`: PRD 状态与覆盖关系索引；判断当前需求时先读这里。
+- `.ai/logs/README.md`: 按日期汇总工程里程碑；历史日志保持原貌。
 - `docs/designs/remember-variable-library.svg`: “记忆力”变量库窗口设计图源文件。
 - `docs/designs/remember-variable-library.png`: “记忆力”变量库窗口设计图预览。
 - `docs/designs/remember-variable-library-ui-flow.svg`: “记忆力”变量库完整交互状态总览图。
@@ -135,6 +138,9 @@
 - MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。
 - `deskmon notify` 只公开 macOS 本地 CLI；应用未运行时静默成功，不自动启动应用。
 - PRD 011 要求所有可见宠物提醒保持原位置和常态尺寸，不再放大、居中或缩回；成功和普通提醒只按原尺寸播放一轮 `celebrate`，错误保持 `idle`。
+- README 只描述当前已实现能力；历史方案留在 PRD 与日志中，不再混入当前使用说明。
+- PRD 不删除历史方案；新方案覆盖旧规则时，在新旧文档顶部和 `docs/prds/README.md` 明确关系。
+- `.ai/logs/YYYY-MM-DD.md` 是不可回写的历史记录；通过 `.ai/logs/README.md` 建立里程碑索引，不用重写旧日志来表达现状。
 - PRD 011 的普通消息严格 FIFO，普通/成功显示 4 秒、错误显示 8 秒，实际队列上限 20 条，视觉叠卡最多 4 层，重复内容合并计数。
 - PRD 011 要彻底删除专注、休息、连续轮次、完成待选择和流程卡片，只保留未运行/运行中两态的单次倒计时。
 - PRD 011 的倒计时默认 30 分钟、范围 1-180 分钟；旧用户迁移排序后的中间快捷时长，运行中修改设置只影响下一轮。

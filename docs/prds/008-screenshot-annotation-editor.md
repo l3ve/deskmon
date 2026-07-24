@@ -1,10 +1,11 @@
 # PRD：Deskmon 区域截图原地标注 V1
 
-状态：待实现
+状态：已实现
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-15
 最后更新：2026-07-15
 发布状态：已发布到 GitHub issue #15：https://github.com/l3ve/deskmon/issues/15
+当前关系：本 PRD 是当前区域截图交互的权威需求；沿用 PRD 007 的保存目录、命名、权限和任务互斥规则。
 
 ## 问题陈述
 

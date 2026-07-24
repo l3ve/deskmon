@@ -1,10 +1,11 @@
 # PRD：Deskmon 统一宠物对话提醒与单次倒计时
 
-状态：首轮实现已完成，待 macOS 实机验收
+状态：已实现并合并到 main
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-24
 最后更新：2026-07-24
 发布状态：已发布到 GitHub issue #21：https://github.com/l3ve/deskmon/issues/21
+当前关系：当前提醒、消息队列、通知路由和单次倒计时的权威需求。
 
 ## 问题陈述
 

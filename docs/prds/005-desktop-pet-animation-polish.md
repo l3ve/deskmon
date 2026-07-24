@@ -1,10 +1,11 @@
 # PRD：Deskmon 桌宠动画节奏优化
 
-状态：需求已通过 grill-me 收敛，待实现拆分
+状态：已实现
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-08
 最后更新：2026-07-08
 发布状态：已发布到 GitHub issue #7：https://github.com/l3ve/deskmon/issues/7
+当前关系：七种既有状态、三档活动节奏和不新增素材的优化边界继续有效。
 
 ## 问题陈述
 
