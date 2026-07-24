@@ -3,21 +3,13 @@ import {
   visibleExternalNotificationText,
   type ExternalNotificationItem,
 } from "./externalNotificationState";
+import { createExternalNotificationFrame } from "./externalNotificationFrame";
 import type { ExternalNotificationPlacement } from "./externalNotificationPresentation";
-
-interface NotificationCardElements {
-  article: HTMLElement;
-  header: HTMLElement;
-  title: HTMLElement;
-  body: HTMLElement;
-  count: HTMLElement;
-}
 
 export interface ExternalNotificationDialogController {
   element: HTMLElement;
   clear(): void;
-  hide(): void;
-  render(items: ExternalNotificationItem[], time: number): void;
+  render(item: ExternalNotificationItem | null, layerCount: number, time: number): void;
   setPlacement(placement: ExternalNotificationPlacement): void;
 }
 
@@ -25,72 +17,50 @@ export function createExternalNotificationDialog(): ExternalNotificationDialogCo
   const element = document.createElement("section");
   element.className = "external-notifications";
   element.hidden = true;
-  element.setAttribute("aria-label", "Deskmon 外部提醒");
+  element.setAttribute("aria-label", "Deskmon 提醒");
   element.setAttribute("aria-live", "polite");
-  element.setAttribute("aria-relevant", "additions text");
 
-  const cards = new Map<number, NotificationCardElements>();
-
-  const createCard = (item: ExternalNotificationItem): NotificationCardElements => {
-    const article = document.createElement("article");
-    article.className = "external-notification-card";
-    article.dataset.notificationId = String(item.id);
-
-    const header = document.createElement("header");
-    header.className = "external-notification-header";
-    const title = document.createElement("strong");
-    title.className = "external-notification-title";
-    const count = document.createElement("span");
-    count.className = "external-notification-count";
-    header.append(title, count);
-
-    const body = document.createElement("p");
-    body.className = "external-notification-body";
-    body.setAttribute("aria-hidden", "true");
-    article.append(header, body);
-    return { article, header, title, body, count };
-  };
+  const frame = createExternalNotificationFrame();
+  const article = document.createElement("article");
+  article.className = "external-notification-card";
+  const header = document.createElement("header");
+  header.className = "external-notification-header";
+  const title = document.createElement("strong");
+  title.className = "external-notification-title";
+  const count = document.createElement("span");
+  count.className = "external-notification-count";
+  header.append(title, count);
+  const body = document.createElement("p");
+  body.className = "external-notification-body";
+  article.append(header, body);
+  element.append(frame, article);
 
   return {
     element,
     clear(): void {
-      cards.clear();
-      element.replaceChildren();
       element.hidden = true;
+      delete element.dataset.layers;
+      delete element.dataset.tone;
     },
-    hide(): void {
-      element.hidden = true;
-    },
-    render(items: ExternalNotificationItem[], time: number): void {
-      const activeIds = new Set(items.map((item) => item.id));
-      for (const [id, card] of cards) {
-        if (!activeIds.has(id)) {
-          card.article.remove();
-          cards.delete(id);
-        }
+    render(item: ExternalNotificationItem | null, layerCount: number, time: number): void {
+      if (!item) {
+        this.clear();
+        return;
       }
-      for (const [index, item] of items.entries()) {
-        let card = cards.get(item.id);
-        if (!card) {
-          card = createCard(item);
-          cards.set(item.id, card);
-        }
-        card.title.textContent = item.title ?? "";
-        card.title.hidden = !item.title;
-        const countLabel = externalNotificationCountLabel(item.count);
-        card.count.textContent = countLabel;
-        card.count.hidden = !countLabel;
-        card.header.hidden = !item.title && !countLabel;
-        card.body.textContent = visibleExternalNotificationText(item, time);
-        card.article.setAttribute(
-          "aria-label",
-          [item.title, item.text, countLabel].filter(Boolean).join("，"),
-        );
-        if (element.children.item(index) !== card.article) {
-          element.insertBefore(card.article, element.children.item(index));
-        }
-      }
-      element.hidden = items.length === 0;
+      const countLabel = externalNotificationCountLabel(item.count);
+      title.textContent = item.title ?? "";
+      title.hidden = !item.title;
+      count.textContent = countLabel;
+      count.hidden = !countLabel;
+      header.hidden = !item.title && !countLabel;
+      body.textContent = visibleExternalNotificationText(item, time);
+      element.dataset.layers = String(Math.max(1, Math.min(4, layerCount)));
+      element.dataset.tone = item.tone;
+      article.setAttribute(
+        "aria-label",
+        [item.title, item.text, countLabel].filter(Boolean).join("，"),
+      );
+      element.hidden = false;
     },
     setPlacement(placement: ExternalNotificationPlacement): void {
       element.dataset.placement = placement;

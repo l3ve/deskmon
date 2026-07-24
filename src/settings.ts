@@ -3,8 +3,8 @@ import type {
   ActivityLevel,
   BootstrapPayload,
   CliInstallationState,
+  CountdownPreferences,
   Dimensions,
-  FocusTimerPreferences,
   PetSize,
   Point,
   Rect,
@@ -13,9 +13,6 @@ import type {
 
 const timerMinMinutes = 1;
 const timerMaxMinutes = 180;
-const timerMessageMaxChars = 80;
-const defaultFocusFinishedMessage = "专注结束，休息一下吧";
-const defaultBreakFinishedMessage = "休息结束，回来继续吧";
 
 const sizeLabels: Record<PetSize, string> = {
   small: "小",
@@ -57,6 +54,7 @@ class SettingsController {
     this.customArea = this.bootstrap.settings.customActivityArea;
     this.render();
     this.installCanvasHandlers();
+    window.addEventListener("resize", () => this.drawAreaCanvas());
   }
 
   private render(): void {
@@ -80,7 +78,7 @@ class SettingsController {
       this.summaryItem("尺寸", sizeLabels[settings.petSize]),
       this.summaryItem("活跃", activityLabels[settings.activityLevel]),
       this.summaryItem("置顶", settings.alwaysOnTop ? "开启" : "关闭"),
-      this.summaryItem("计时", this.focusTimerSummary(settings.focusTimer)),
+      this.summaryItem("倒计时", `${settings.countdown.minutes} 分钟`),
       this.summaryItem("截图", settings.screenshot.saveDirectory ? "自定义" : "桌面"),
       this.summaryItem("命令", cliInstallationLabel(this.bootstrap.cliInstallationState)),
       this.summaryItem("区域", this.customArea ? formatDimensions(this.customArea) : "默认"),
@@ -110,7 +108,7 @@ class SettingsController {
     );
     controls.append(fields);
 
-    const focusTimerPanel = this.focusTimerPanel(settings.focusTimer);
+    const countdownPanel = this.countdownPanel(settings.countdown);
     const screenshotPanel = this.screenshotPanel();
     const cliToolPanel = this.cliToolPanel(this.bootstrap.cliInstallationState);
 
@@ -134,7 +132,7 @@ class SettingsController {
     areaPanel.append(areaHeader, canvasWrap, this.status);
 
     const content = element("main", "settings-content");
-    content.append(controls, focusTimerPanel, screenshotPanel, cliToolPanel, areaPanel);
+    content.append(controls, countdownPanel, screenshotPanel, cliToolPanel, areaPanel);
 
     const workspace = element("div", "settings-workspace");
     workspace.append(sidebar, content);
@@ -189,47 +187,20 @@ class SettingsController {
     return field;
   }
 
-  private focusTimerPanel(focusTimer: FocusTimerPreferences): HTMLElement {
-    const panel = element("section", "settings-panel focus-timer-panel");
+  private countdownPanel(countdown: CountdownPreferences): HTMLElement {
+    const panel = element("section", "settings-panel countdown-panel");
     const header = element("div", "panel-header");
-    header.append(element("h2", "", "专注计时"));
+    header.append(element("h2", "", "倒计时"));
 
     const fields = element("div", "settings-fields");
-    const focusRow = element("div", "field-row timer-field-row");
-    focusRow.append(element("span", "field-label", "专注时长"));
-    const focusGroup = element("div", "timer-number-group");
-    focusTimer.focusMinutes.forEach((minutes, index) => {
-      focusGroup.append(
-        this.numberInput(minutes, `专注 ${index + 1}`, (nextMinutes) => {
-          const next = cloneFocusTimer(focusTimer);
-          next.focusMinutes[index] = nextMinutes;
-          this.saveFocusTimer(next);
-        }),
-      );
-    });
-    focusRow.append(focusGroup);
-
     fields.append(
-      focusRow,
-      this.numberField("休息时长", focusTimer.breakMinutes, (breakMinutes) => {
-        const next = cloneFocusTimer(focusTimer);
-        next.breakMinutes = breakMinutes;
-        this.saveFocusTimer(next);
-      }),
-      this.messageField("专注结束提示", focusTimer.focusFinishedMessage, (message) => {
-        const next = cloneFocusTimer(focusTimer);
-        next.focusFinishedMessage = message;
-        this.saveFocusTimer(next);
-      }),
-      this.messageField("休息结束提示", focusTimer.breakFinishedMessage, (message) => {
-        const next = cloneFocusTimer(focusTimer);
-        next.breakFinishedMessage = message;
-        this.saveFocusTimer(next);
-      }),
-      this.toggleControl("休息结束播放声音", focusTimer.breakSoundEnabled, (breakSoundEnabled) => {
-        const next = cloneFocusTimer(focusTimer);
-        next.breakSoundEnabled = breakSoundEnabled;
-        this.saveFocusTimer(next);
+      this.numberField("倒计时时长", countdown.minutes, (minutes) => {
+        const error = validateTimerMinutes(minutes, "倒计时时长");
+        if (error) {
+          this.setStatus(error, "error");
+          return;
+        }
+        this.save({ countdown: { minutes } });
       }),
     );
 
@@ -465,32 +436,6 @@ class SettingsController {
     return wrap;
   }
 
-  private messageField(
-    label: string,
-    value: string,
-    onChange: (value: string) => void,
-  ): HTMLElement {
-    const field = element("label", "field-row timer-message-row");
-    field.append(element("span", "field-label", label));
-    const input = document.createElement("textarea");
-    input.className = "settings-textarea";
-    input.maxLength = timerMessageMaxChars;
-    input.rows = 2;
-    input.value = value;
-    input.addEventListener("change", () => onChange(input.value));
-    field.append(input);
-    return field;
-  }
-
-  private saveFocusTimer(next: FocusTimerPreferences): void {
-    const normalized = normalizeFocusTimer(next);
-    if (typeof normalized === "string") {
-      this.setStatus(normalized, "error");
-      return;
-    }
-    this.save({ focusTimer: normalized });
-  }
-
   private save(patch: Partial<UserPreferences>): void {
     if (!this.bootstrap) {
       return;
@@ -501,7 +446,7 @@ class SettingsController {
       petSize: settings.petSize,
       activityLevel: settings.activityLevel,
       alwaysOnTop: settings.alwaysOnTop,
-      focusTimer: cloneFocusTimer(settings.focusTimer),
+      countdown: { ...settings.countdown },
       screenshot: { ...settings.screenshot },
       customActivityArea: this.customArea,
     };
@@ -509,9 +454,7 @@ class SettingsController {
       petSize: patch.petSize ?? current.petSize,
       activityLevel: patch.activityLevel ?? current.activityLevel,
       alwaysOnTop: patch.alwaysOnTop ?? current.alwaysOnTop,
-      focusTimer: patch.focusTimer
-        ? cloneFocusTimer(patch.focusTimer)
-        : cloneFocusTimer(current.focusTimer),
+      countdown: patch.countdown ? { ...patch.countdown } : { ...current.countdown },
       screenshot: patch.screenshot ? { ...patch.screenshot } : { ...current.screenshot },
       customActivityArea:
         patch.customActivityArea === undefined ? current.customActivityArea : patch.customActivityArea,
@@ -634,12 +577,10 @@ class SettingsController {
     if (!this.bootstrap) {
       return;
     }
-    const bounds = this.canvas.parentElement?.getBoundingClientRect();
-    const cssWidth = Math.max(320, Math.floor(bounds?.width ?? 620));
-    const cssHeight = 330;
+    const bounds = this.canvas.getBoundingClientRect();
+    const cssWidth = Math.max(1, Math.floor(bounds.width || 620));
+    const cssHeight = Math.max(1, Math.floor(bounds.height || 190));
     const dpr = window.devicePixelRatio || 1;
-    this.canvas.style.width = `${cssWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
     this.canvas.width = Math.round(cssWidth * dpr);
     this.canvas.height = Math.round(cssHeight * dpr);
 
@@ -722,10 +663,6 @@ class SettingsController {
     return `当前 ${formatDimensions(area)}，至少 ${formatDimensions(this.minimumAreaDimensions())}`;
   }
 
-  private focusTimerSummary(focusTimer: FocusTimerPreferences): string {
-    return `${focusTimer.focusMinutes.join("/")}，休息 ${focusTimer.breakMinutes}`;
-  }
-
   private setStatus(
     message: string,
     tone: "neutral" | "success" | "warning" | "error" = "neutral",
@@ -746,8 +683,8 @@ class SettingsController {
     const areas = bootstrap?.monitors.map((monitor) => monitor.workArea) ?? [fallback];
     const world = unionRects(areas);
     const bounds = this.canvas.getBoundingClientRect();
-    const width = Math.max(320, bounds.width || 620);
-    const height = Math.max(260, bounds.height || 330);
+    const width = Math.max(1, bounds.width || 620);
+    const height = Math.max(1, bounds.height || 190);
     const scale = Math.min((width - 36) / world.width, (height - 36) / world.height);
     return {
       world,
@@ -828,61 +765,11 @@ function cliInstallationAction(state: CliInstallationState): string {
   }[state];
 }
 
-function cloneFocusTimer(focusTimer: FocusTimerPreferences): FocusTimerPreferences {
-  return {
-    focusMinutes: [...focusTimer.focusMinutes] as [number, number, number],
-    breakMinutes: focusTimer.breakMinutes,
-    focusFinishedMessage: focusTimer.focusFinishedMessage,
-    breakFinishedMessage: focusTimer.breakFinishedMessage,
-    breakSoundEnabled: focusTimer.breakSoundEnabled,
-  };
-}
-
-function normalizeFocusTimer(
-  focusTimer: FocusTimerPreferences,
-): FocusTimerPreferences | string {
-  const focusMinutes = [...focusTimer.focusMinutes];
-  for (const minutes of focusMinutes) {
-    const error = validateTimerMinutes(minutes, "专注时长");
-    if (error) {
-      return error;
-    }
-  }
-  focusMinutes.sort((left, right) => left - right);
-  if (new Set(focusMinutes).size !== focusMinutes.length) {
-    return "专注快捷时长不能重复";
-  }
-  const breakError = validateTimerMinutes(focusTimer.breakMinutes, "休息时长");
-  if (breakError) {
-    return breakError;
-  }
-
-  return {
-    focusMinutes: focusMinutes as [number, number, number],
-    breakMinutes: focusTimer.breakMinutes,
-    focusFinishedMessage: normalizeTimerMessage(
-      focusTimer.focusFinishedMessage,
-      defaultFocusFinishedMessage,
-    ),
-    breakFinishedMessage: normalizeTimerMessage(
-      focusTimer.breakFinishedMessage,
-      defaultBreakFinishedMessage,
-    ),
-    breakSoundEnabled: focusTimer.breakSoundEnabled,
-  };
-}
-
 function validateTimerMinutes(value: number, label: string): string | null {
   if (!Number.isInteger(value) || value < timerMinMinutes || value > timerMaxMinutes) {
     return `${label}需要在 ${timerMinMinutes}-${timerMaxMinutes} 分钟之间`;
   }
   return null;
-}
-
-function normalizeTimerMessage(message: string, defaultMessage: string): string {
-  const flattened = message.replace(/[\r\n]+/g, " ").trim();
-  const value = flattened || defaultMessage;
-  return Array.from(value).slice(0, timerMessageMaxChars).join("");
 }
 
 function unionRects(rects: Rect[]): Rect {

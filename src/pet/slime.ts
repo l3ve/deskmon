@@ -47,6 +47,18 @@ interface FrameBounds {
   maxY: number;
 }
 
+interface SpriteFrameScaleInput {
+  sourceWidth: number;
+  sourceHeight: number;
+  anchorWidth: number;
+  anchorHeight: number;
+}
+
+interface SpriteFrameRenderScales {
+  effect: number;
+  body: number;
+}
+
 const spriteTargetWidth = 28;
 const spriteTargetHeight = 25;
 const spriteTargetCenterX = 16;
@@ -149,18 +161,13 @@ class SpriteSheetSlimeSkin implements PetSkin {
 
     const frameIndex = getSpriteFrameIndex(sheet, time, facing);
     const frame = sheet.frames[frameIndex];
-    const scale = Math.min(
-      spriteTargetWidth / frame.anchorWidth,
-      spriteTargetHeight / frame.anchorHeight,
-      spriteMaxDrawWidth / frame.sourceWidth,
-      spriteMaxDrawHeight / frame.sourceHeight,
-    );
-    const width = Math.round(frame.sourceWidth * scale);
-    const height = Math.round(frame.sourceHeight * scale);
-    const anchorX = frame.anchorX * scale;
-    const anchorY = frame.anchorY * scale;
-    const anchorWidth = frame.anchorWidth * scale;
-    const anchorHeight = frame.anchorHeight * scale;
+    const scales = spriteFrameRenderScales(frame);
+    const width = Math.round(frame.sourceWidth * scales.effect);
+    const height = Math.round(frame.sourceHeight * scales.effect);
+    const anchorX = frame.anchorX * scales.effect;
+    const anchorY = frame.anchorY * scales.effect;
+    const anchorWidth = frame.anchorWidth * scales.effect;
+    const anchorHeight = frame.anchorHeight * scales.effect;
     const x = clampSpritePosition(
       Math.round(spriteTargetCenterX - anchorX - anchorWidth * 0.5),
       width,
@@ -181,6 +188,30 @@ class SpriteSheetSlimeSkin implements PetSkin {
       width,
       height,
     );
+
+    if (mood === "celebrate" && scales.body > scales.effect) {
+      const bodyWidth = Math.round(frame.anchorWidth * scales.body);
+      const bodyHeight = Math.round(frame.anchorHeight * scales.body);
+      const bodyX = clampSpritePosition(
+        Math.round(spriteTargetCenterX - bodyWidth * 0.5),
+        bodyWidth,
+      );
+      const bodyY = clampSpritePosition(
+        Math.round(spriteTargetBaselineY - bodyHeight),
+        bodyHeight,
+      );
+      ctx.drawImage(
+        sheet.canvas,
+        frame.sourceX + frame.anchorX,
+        frame.sourceY + frame.anchorY,
+        frame.anchorWidth,
+        frame.anchorHeight,
+        bodyX,
+        bodyY,
+        bodyWidth,
+        bodyHeight,
+      );
+    }
   }
 }
 
@@ -188,6 +219,23 @@ export const spriteSlimeSkin: PetSkin = new SpriteSheetSlimeSkin(
   slimeSpriteSheets,
   defaultSlimeSkin,
 );
+
+export function spriteFrameRenderScales(
+  frame: SpriteFrameScaleInput,
+): SpriteFrameRenderScales {
+  const body = Math.min(
+    spriteTargetWidth / frame.anchorWidth,
+    spriteTargetHeight / frame.anchorHeight,
+  );
+  return {
+    body,
+    effect: Math.min(
+      body,
+      spriteMaxDrawWidth / frame.sourceWidth,
+      spriteMaxDrawHeight / frame.sourceHeight,
+    ),
+  };
+}
 
 async function loadSpriteSheet(definition: SpriteSheetDefinition): Promise<LoadedSpriteSheet> {
   const image = await loadImage(definition.src);

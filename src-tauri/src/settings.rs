@@ -6,11 +6,7 @@ use tauri::{AppHandle, Manager};
 const SETTINGS_FILE: &str = "settings.json";
 pub(crate) const TIMER_MIN_MINUTES: u64 = 1;
 pub(crate) const TIMER_MAX_MINUTES: u64 = 180;
-const DEFAULT_FOCUS_MINUTES: [u64; 3] = [5, 25, 45];
-const DEFAULT_BREAK_MINUTES: u64 = 5;
-const DEFAULT_FOCUS_FINISHED_MESSAGE: &str = "专注结束，休息一下吧";
-const DEFAULT_BREAK_FINISHED_MESSAGE: &str = "休息结束，回来继续吧";
-const TIMER_MESSAGE_MAX_CHARS: usize = 80;
+const DEFAULT_COUNTDOWN_MINUTES: u64 = 30;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,17 +45,24 @@ pub(crate) enum ActivityLevel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct FocusTimerPreferences {
-    #[serde(default = "default_focus_minutes")]
-    pub(crate) focus_minutes: [u64; 3],
-    #[serde(default = "default_break_minutes")]
-    pub(crate) break_minutes: u64,
-    #[serde(default = "default_focus_finished_message")]
-    pub(crate) focus_finished_message: String,
-    #[serde(default = "default_break_finished_message")]
-    pub(crate) break_finished_message: String,
-    #[serde(default = "default_break_sound_enabled")]
-    pub(crate) break_sound_enabled: bool,
+pub(crate) struct CountdownPreferences {
+    #[serde(default = "default_countdown_minutes")]
+    pub(crate) minutes: u64,
+}
+
+impl Default for CountdownPreferences {
+    fn default() -> Self {
+        Self {
+            minutes: DEFAULT_COUNTDOWN_MINUTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyFocusTimerPreferences {
+    #[serde(default)]
+    focus_minutes: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,18 +72,6 @@ pub(crate) struct ScreenshotPreferences {
     pub(crate) save_directory: Option<String>,
 }
 
-impl Default for FocusTimerPreferences {
-    fn default() -> Self {
-        Self {
-            focus_minutes: DEFAULT_FOCUS_MINUTES,
-            break_minutes: DEFAULT_BREAK_MINUTES,
-            focus_finished_message: DEFAULT_FOCUS_FINISHED_MESSAGE.into(),
-            break_finished_message: DEFAULT_BREAK_FINISHED_MESSAGE.into(),
-            break_sound_enabled: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
@@ -88,7 +79,9 @@ pub(crate) struct Settings {
     pub(crate) activity_level: ActivityLevel,
     pub(crate) always_on_top: bool,
     #[serde(default)]
-    pub(crate) focus_timer: FocusTimerPreferences,
+    pub(crate) countdown: CountdownPreferences,
+    #[serde(default, rename = "focusTimer", skip_serializing)]
+    legacy_focus_timer: Option<LegacyFocusTimerPreferences>,
     #[serde(default)]
     pub(crate) screenshot: ScreenshotPreferences,
     pub(crate) pet_visible: bool,
@@ -103,7 +96,8 @@ impl Default for Settings {
             pet_size: PetSize::Medium,
             activity_level: ActivityLevel::Standard,
             always_on_top: true,
-            focus_timer: FocusTimerPreferences::default(),
+            countdown: CountdownPreferences::default(),
+            legacy_focus_timer: None,
             screenshot: ScreenshotPreferences::default(),
             pet_visible: true,
             movement_paused: false,
@@ -119,7 +113,7 @@ pub(crate) struct UserPreferences {
     pub(crate) pet_size: PetSize,
     pub(crate) activity_level: ActivityLevel,
     pub(crate) always_on_top: bool,
-    pub(crate) focus_timer: FocusTimerPreferences,
+    pub(crate) countdown: CountdownPreferences,
     pub(crate) screenshot: ScreenshotPreferences,
     pub(crate) custom_activity_area: Option<Rect>,
 }
@@ -132,8 +126,10 @@ pub(crate) fn load_settings(app: &AppHandle) -> Settings {
         .ok()
         .and_then(|content| serde_json::from_str(&content).ok())
         .unwrap_or_default();
-    settings.focus_timer =
-        normalize_focus_timer_preferences(settings.focus_timer).unwrap_or_default();
+    if let Some(legacy) = settings.legacy_focus_timer.take() {
+        settings.countdown = migrate_legacy_countdown(legacy);
+    }
+    settings.countdown = normalize_countdown_preferences(settings.countdown).unwrap_or_default();
     settings.screenshot = normalize_screenshot_preferences(settings.screenshot);
     settings
 }
@@ -155,32 +151,11 @@ pub(crate) fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), 
     fs::write(path, json).map_err(|err| err.to_string())
 }
 
-pub(crate) fn normalize_focus_timer_preferences(
-    preferences: FocusTimerPreferences,
-) -> Result<FocusTimerPreferences, String> {
-    let mut focus_minutes = preferences.focus_minutes;
-    for minutes in focus_minutes {
-        validate_timer_minutes(minutes, "专注时长")?;
-    }
-    focus_minutes.sort_unstable();
-    if focus_minutes[0] == focus_minutes[1] || focus_minutes[1] == focus_minutes[2] {
-        return Err("专注快捷时长不能重复".into());
-    }
-    validate_timer_minutes(preferences.break_minutes, "休息时长")?;
-
-    Ok(FocusTimerPreferences {
-        focus_minutes,
-        break_minutes: preferences.break_minutes,
-        focus_finished_message: normalize_timer_message(
-            &preferences.focus_finished_message,
-            DEFAULT_FOCUS_FINISHED_MESSAGE,
-        ),
-        break_finished_message: normalize_timer_message(
-            &preferences.break_finished_message,
-            DEFAULT_BREAK_FINISHED_MESSAGE,
-        ),
-        break_sound_enabled: preferences.break_sound_enabled,
-    })
+pub(crate) fn normalize_countdown_preferences(
+    preferences: CountdownPreferences,
+) -> Result<CountdownPreferences, String> {
+    validate_timer_minutes(preferences.minutes, "倒计时时长")?;
+    Ok(preferences)
 }
 
 pub(crate) fn validate_timer_minutes(minutes: u64, label: &str) -> Result<(), String> {
@@ -193,35 +168,22 @@ pub(crate) fn validate_timer_minutes(minutes: u64, label: &str) -> Result<(), St
     }
 }
 
-fn normalize_timer_message(message: &str, default_message: &str) -> String {
-    let flattened = message.replace(['\r', '\n'], " ");
-    let trimmed = flattened.trim();
-    let message = if trimmed.is_empty() {
-        default_message
-    } else {
-        trimmed
-    };
-    message.chars().take(TIMER_MESSAGE_MAX_CHARS).collect()
+fn migrate_legacy_countdown(legacy: LegacyFocusTimerPreferences) -> CountdownPreferences {
+    let mut valid = legacy
+        .focus_minutes
+        .into_iter()
+        .filter(|minutes| (TIMER_MIN_MINUTES..=TIMER_MAX_MINUTES).contains(minutes))
+        .collect::<Vec<_>>();
+    valid.sort_unstable();
+    let minutes = valid
+        .get(valid.len().saturating_sub(1) / 2)
+        .copied()
+        .unwrap_or(DEFAULT_COUNTDOWN_MINUTES);
+    CountdownPreferences { minutes }
 }
 
-fn default_focus_minutes() -> [u64; 3] {
-    DEFAULT_FOCUS_MINUTES
-}
-
-fn default_break_minutes() -> u64 {
-    DEFAULT_BREAK_MINUTES
-}
-
-fn default_focus_finished_message() -> String {
-    DEFAULT_FOCUS_FINISHED_MESSAGE.into()
-}
-
-fn default_break_finished_message() -> String {
-    DEFAULT_BREAK_FINISHED_MESSAGE.into()
-}
-
-fn default_break_sound_enabled() -> bool {
-    true
+fn default_countdown_minutes() -> u64 {
+    DEFAULT_COUNTDOWN_MINUTES
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -235,14 +197,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn focus_timer_defaults_match_lightweight_focus_timer_prd() {
-        let preferences = FocusTimerPreferences::default();
-
-        assert_eq!(preferences.focus_minutes, [5, 25, 45]);
-        assert_eq!(preferences.break_minutes, 5);
-        assert_eq!(preferences.focus_finished_message, "专注结束，休息一下吧");
-        assert_eq!(preferences.break_finished_message, "休息结束，回来继续吧");
-        assert!(preferences.break_sound_enabled);
+    fn countdown_defaults_to_thirty_minutes() {
+        assert_eq!(CountdownPreferences::default().minutes, 30);
     }
 
     #[test]
@@ -271,7 +227,7 @@ mod tests {
             "petSize": "medium",
             "activityLevel": "standard",
             "alwaysOnTop": true,
-            "focusTimer": FocusTimerPreferences::default(),
+            "countdown": CountdownPreferences::default(),
             "petVisible": true,
             "movementPaused": false,
             "customActivityArea": null,
@@ -284,49 +240,51 @@ mod tests {
     }
 
     #[test]
-    fn focus_timer_minutes_are_sorted_and_must_be_unique() {
-        let preferences = FocusTimerPreferences {
-            focus_minutes: [45, 5, 25],
-            ..FocusTimerPreferences::default()
-        };
-
-        let normalized = normalize_focus_timer_preferences(preferences).expect("valid settings");
-        assert_eq!(normalized.focus_minutes, [5, 25, 45]);
-
-        let duplicate = FocusTimerPreferences {
-            focus_minutes: [25, 25, 45],
-            ..FocusTimerPreferences::default()
-        };
-        assert!(normalize_focus_timer_preferences(duplicate).is_err());
+    fn countdown_minutes_must_stay_in_range() {
+        assert!(normalize_countdown_preferences(CountdownPreferences { minutes: 1 }).is_ok());
+        assert!(normalize_countdown_preferences(CountdownPreferences { minutes: 180 }).is_ok());
+        assert!(normalize_countdown_preferences(CountdownPreferences { minutes: 0 }).is_err());
+        assert!(normalize_countdown_preferences(CountdownPreferences { minutes: 181 }).is_err());
     }
 
     #[test]
-    fn focus_timer_minutes_must_stay_in_range() {
-        let too_short = FocusTimerPreferences {
-            focus_minutes: [0, 25, 45],
-            ..FocusTimerPreferences::default()
-        };
-        assert!(normalize_focus_timer_preferences(too_short).is_err());
+    fn legacy_focus_timer_uses_the_sorted_middle_value() {
+        let legacy = serde_json::json!({
+            "petSize": "medium",
+            "activityLevel": "standard",
+            "alwaysOnTop": true,
+            "focusTimer": {
+                "focusMinutes": [45, 10, 25],
+                "breakMinutes": 5,
+                "focusFinishedMessage": "ignored",
+                "breakFinishedMessage": "ignored",
+                "breakSoundEnabled": true
+            },
+            "petVisible": true,
+            "movementPaused": false,
+            "customActivityArea": null,
+            "lastPosition": null
+        });
+        let mut settings: Settings =
+            serde_json::from_value(legacy).expect("legacy settings should load");
+        settings.countdown = migrate_legacy_countdown(
+            settings
+                .legacy_focus_timer
+                .take()
+                .expect("legacy timer should be present"),
+        );
 
-        let too_long_break = FocusTimerPreferences {
-            break_minutes: 181,
-            ..FocusTimerPreferences::default()
-        };
-        assert!(normalize_focus_timer_preferences(too_long_break).is_err());
+        assert_eq!(settings.countdown.minutes, 25);
+        let serialized = serde_json::to_value(&settings).expect("settings should serialize");
+        assert!(serialized.get("focusTimer").is_none());
+        assert_eq!(serialized["countdown"]["minutes"], 25);
     }
 
     #[test]
-    fn focus_timer_messages_are_normalized() {
-        let long_message = "一".repeat(TIMER_MESSAGE_MAX_CHARS + 8);
-        let preferences = FocusTimerPreferences {
-            focus_finished_message: "  \n  ".into(),
-            break_finished_message: format!("  休息\n结束  {long_message}"),
-            ..FocusTimerPreferences::default()
-        };
-
-        let normalized = normalize_focus_timer_preferences(preferences).expect("valid settings");
-        assert_eq!(normalized.focus_finished_message, "专注结束，休息一下吧");
-        assert!(!normalized.break_finished_message.contains('\n'));
-        assert!(normalized.break_finished_message.chars().count() <= TIMER_MESSAGE_MAX_CHARS);
+    fn invalid_legacy_values_fall_back_to_thirty_minutes() {
+        let migrated = migrate_legacy_countdown(LegacyFocusTimerPreferences {
+            focus_minutes: vec![0, 181],
+        });
+        assert_eq!(migrated.minutes, 30);
     }
 }
