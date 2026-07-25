@@ -395,12 +395,19 @@ class PetController {
     if (!this.externalNotifications.presenting) {
       return;
     }
+    const current = this.externalNotifications.items[0];
+    if (!current) {
+      return;
+    }
+    const layerCount = externalNotificationLayerCount(this.externalNotifications);
+    const notificationHeight = this.externalDialog.measureHeight(current, layerCount);
     const layout = createExternalNotificationLayout({
       petPosition: this.position,
       petDimensions: this.petDimensions,
       petWindowDimensions: this.petWindowDimensions,
       monitors: this.monitors,
       fallbackArea: this.activityArea,
+      notificationHeight,
       lockedPlacement: this.drag?.active
         ? this.externalLayout?.notificationPlacement
         : undefined,
@@ -413,7 +420,11 @@ class PetController {
     style.width = `${layout.notificationDimensions.width}px`;
     style.height = `${layout.notificationDimensions.height}px`;
     this.externalDialog.setPlacement(layout.notificationPlacement);
-    this.renderNotification(performance.now());
+    this.externalDialog.render(
+      current,
+      layerCount,
+      this.externalNotifications.pausedAt ?? performance.now(),
+    );
     this.pendingPresentationSync = true;
     this.flushNotificationPresentation();
   }

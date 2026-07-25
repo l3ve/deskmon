@@ -33,6 +33,21 @@ describe("external notification layout", () => {
     expect(layout.petOffset).toEqual({ x: 0, y: 24 });
   });
 
+  it("uses the measured dialog height without moving the pet anchor", () => {
+    const layout = createExternalNotificationLayout({
+      petPosition: { x: 200, y: 200 },
+      petDimensions: { width: 104, height: 104 },
+      petWindowDimensions: { width: 104, height: 104 },
+      monitors: [monitor],
+      fallbackArea: monitor.workArea,
+      notificationHeight: 220,
+    });
+
+    expect(layout.notificationDimensions.height).toBe(220);
+    expect(layout.windowPosition).toEqual({ x: 200, y: 142 });
+    expect(layout.petOffset).toEqual({ x: 0, y: 58 });
+  });
+
   it("falls back to the left near the right screen edge", () => {
     const layout = createExternalNotificationLayout({
       petPosition: { x: 1320, y: 300 },

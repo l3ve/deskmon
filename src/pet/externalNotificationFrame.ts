@@ -1,10 +1,12 @@
 import type { ExternalNotificationPlacement } from "./externalNotificationPresentation";
 
 const svgNamespace = "http://www.w3.org/2000/svg";
-const frameWidth = 360;
-const frameHeight = 152;
+export const externalNotificationFrameWidth = 360;
+export const externalNotificationFrameMinHeight = 152;
+export const externalNotificationCardMinHeight = 116;
+export const externalNotificationFrameOverhang = 36;
 const cardWidth = 312;
-const cardHeight = 116;
+const pixelGrid = 4;
 
 interface CardOrigin {
   x: number;
@@ -187,6 +189,7 @@ function appendPath(parent: SVGElement, className: string, pathData: string): SV
 function appendPlacementFrame(
   frame: SVGSVGElement,
   placement: ExternalNotificationPlacement,
+  cardHeight: number,
 ): void {
   const origin = cardOrigin(placement);
   const group = svgElement("g", "external-notification-frame-group");
@@ -253,16 +256,28 @@ function appendPlacementFrame(
   frame.append(group);
 }
 
-export function createExternalNotificationFrame(): SVGSVGElement {
+export function externalNotificationFrameHeightForCardHeight(cardHeight: number): number {
+  const normalizedCardHeight = Math.max(
+    externalNotificationCardMinHeight,
+    Math.ceil(cardHeight / pixelGrid) * pixelGrid,
+  );
+  return normalizedCardHeight + externalNotificationFrameOverhang;
+}
+
+export function createExternalNotificationFrame(
+  requestedHeight = externalNotificationFrameMinHeight,
+): SVGSVGElement {
+  const frameHeight = Math.max(externalNotificationFrameMinHeight, requestedHeight);
+  const cardHeight = frameHeight - externalNotificationFrameOverhang;
   const frame = svgElement("svg", "external-notification-frame");
-  frame.setAttribute("viewBox", `0 0 ${frameWidth} ${frameHeight}`);
-  frame.setAttribute("width", String(frameWidth));
+  frame.setAttribute("viewBox", `0 0 ${externalNotificationFrameWidth} ${frameHeight}`);
+  frame.setAttribute("width", String(externalNotificationFrameWidth));
   frame.setAttribute("height", String(frameHeight));
   frame.setAttribute("preserveAspectRatio", "none");
   frame.setAttribute("aria-hidden", "true");
   frame.setAttribute("focusable", "false");
   for (const placement of ["right", "left", "below"] as const) {
-    appendPlacementFrame(frame, placement);
+    appendPlacementFrame(frame, placement, cardHeight);
   }
   return frame;
 }

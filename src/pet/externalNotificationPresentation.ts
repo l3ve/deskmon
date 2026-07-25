@@ -1,4 +1,8 @@
 import type { Dimensions, MonitorPayload, Point, Rect } from "../types";
+import {
+  externalNotificationFrameMinHeight,
+  externalNotificationFrameWidth,
+} from "./externalNotificationFrame";
 import { clampPointToRect, monitorForPoint } from "./geometry";
 
 export type ExternalNotificationPlacement = "right" | "left" | "below";
@@ -19,12 +23,13 @@ interface CreateLayoutInput {
   monitors: MonitorPayload[];
   fallbackArea: Rect;
   lockedPlacement?: ExternalNotificationPlacement;
+  notificationHeight?: number;
 }
 
 interface PhysicalRect extends Rect {}
 
-export const externalNotificationDialogWidth = 360;
-export const externalNotificationDialogHeight = 152;
+export const externalNotificationDialogWidth = externalNotificationFrameWidth;
+export const externalNotificationDialogHeight = externalNotificationFrameMinHeight;
 const presentationGap = 14;
 
 export function createExternalNotificationLayout({
@@ -34,6 +39,7 @@ export function createExternalNotificationLayout({
   monitors,
   fallbackArea,
   lockedPlacement,
+  notificationHeight,
 }: CreateLayoutInput): ExternalNotificationLayout {
   const petCenter = {
     x: petPosition.x + petWindowDimensions.width * 0.5,
@@ -47,7 +53,10 @@ export function createExternalNotificationLayout({
   );
   const notificationDimensions = {
     width: externalNotificationDialogWidth,
-    height: externalNotificationDialogHeight,
+    height: Math.max(
+      externalNotificationDialogHeight,
+      notificationHeight ?? externalNotificationDialogHeight,
+    ),
   };
   const notificationPhysicalDimensions = {
     width: notificationDimensions.width * scaleFactor,

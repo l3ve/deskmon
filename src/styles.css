@@ -68,6 +68,8 @@ button {
   --notification-muted: #756a8f;
   --notification-card-x: 16px;
   --notification-card-y: 0px;
+  --notification-card-height: 116px;
+  --notification-frame-height: 152px;
   position: absolute;
   z-index: 3;
   display: block;
@@ -83,12 +85,17 @@ button {
   display: none;
 }
 
+.external-notifications[data-measuring="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .external-notification-frame {
   position: absolute;
   inset: 0;
   z-index: 0;
   width: 360px;
-  height: 152px;
+  height: var(--notification-frame-height);
   overflow: visible;
   pointer-events: none;
   shape-rendering: crispEdges;
@@ -198,11 +205,18 @@ button {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
   width: 312px;
-  height: 116px;
+  height: var(--notification-card-height);
   padding: 14px 24px 16px;
   overflow: hidden;
   color: var(--notification-text);
   background: transparent;
+}
+
+.external-notifications[data-measuring="true"] .external-notification-card {
+  grid-template-rows: auto auto;
+  height: auto;
+  min-height: 116px;
+  overflow: visible;
 }
 
 .external-notifications[data-tone="error"] {
@@ -283,7 +297,6 @@ button {
 }
 
 .external-notification-body {
-  display: -webkit-box;
   align-self: start;
   margin: 0;
   overflow: hidden;
@@ -293,8 +306,6 @@ button {
   line-height: 1.4;
   white-space: pre-line;
   overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
 }
 
 .external-notification-header[hidden] + .external-notification-body {
