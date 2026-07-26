@@ -65,11 +65,15 @@ export function createExternalNotificationLayout({
   const pet: PhysicalRect = { ...petPosition, ...petWindowDimensions };
   const gap = presentationGap * scaleFactor;
   const candidates = candidatePlacements(pet, notificationPhysicalDimensions, gap);
+  const fittedCandidates = candidates.map((candidate) => ({
+    ...candidate,
+    rect: clampRectToArea(candidate.rect, workArea),
+  }));
   const selected =
-    candidates.find(({ placement }) => placement === lockedPlacement) ??
-    candidates.find(({ rect }) => rectInside(rect, workArea)) ??
-    candidates[candidates.length - 1]!;
-  const notification = clampRectToArea(selected.rect, workArea);
+    fittedCandidates.find(({ placement }) => placement === lockedPlacement) ??
+    fittedCandidates.find(({ rect }) => rectClearOfPet(rect, pet, gap)) ??
+    fittedCandidates[fittedCandidates.length - 1]!;
+  const notification = selected.rect;
   const groupLeft = Math.min(pet.x, notification.x);
   const groupTop = Math.min(pet.y, notification.y);
   const groupRight = Math.max(pet.x + pet.width, notification.x + notification.width);
@@ -129,12 +133,12 @@ function candidatePlacements(
   ];
 }
 
-function rectInside(rect: PhysicalRect, area: Rect): boolean {
+function rectClearOfPet(rect: PhysicalRect, pet: PhysicalRect, gap: number): boolean {
   return (
-    rect.x >= area.x &&
-    rect.y >= area.y &&
-    rect.x + rect.width <= area.x + area.width &&
-    rect.y + rect.height <= area.y + area.height
+    rect.x >= pet.x + pet.width + gap ||
+    rect.x + rect.width + gap <= pet.x ||
+    rect.y >= pet.y + pet.height + gap ||
+    rect.y + rect.height + gap <= pet.y
   );
 }
 

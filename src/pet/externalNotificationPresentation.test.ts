@@ -48,6 +48,23 @@ describe("external notification layout", () => {
     expect(layout.petOffset).toEqual({ x: 0, y: 58 });
   });
 
+  it("keeps a side placement clear of the pet along the bottom screen edge", () => {
+    for (const notificationHeight of [152, 220]) {
+      const layout = createExternalNotificationLayout({
+        petPosition: { x: 500, y: 756 },
+        petDimensions: { width: 104, height: 104 },
+        petWindowDimensions: { width: 104, height: 104 },
+        monitors: [monitor],
+        fallbackArea: monitor.workArea,
+        notificationHeight,
+      });
+
+      const petRight = layout.petOffset.x + 104;
+      expect(layout.notificationPlacement).toBe("right");
+      expect(layout.notificationOffset.x).toBeGreaterThanOrEqual(petRight + 14);
+    }
+  });
+
   it("falls back to the left near the right screen edge", () => {
     const layout = createExternalNotificationLayout({
       petPosition: { x: 1320, y: 300 },
