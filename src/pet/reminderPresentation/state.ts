@@ -1,12 +1,12 @@
 export type PetNotificationTone = "normal" | "error";
 
-export interface ExternalNotificationPayload {
+export interface ReminderPayload {
   title: string | null;
   text: string;
   tone: PetNotificationTone;
 }
 
-export interface ExternalNotificationItem {
+export interface ReminderItem {
   id: number;
   title: string | null;
   text: string;
@@ -16,8 +16,8 @@ export interface ExternalNotificationItem {
   revealedAt: number | null;
 }
 
-export interface ExternalNotificationState {
-  items: ExternalNotificationItem[];
+export interface ReminderState {
+  items: ReminderItem[];
   nextId: number;
   presenting: boolean;
   expiresAt: number | null;
@@ -25,7 +25,7 @@ export interface ExternalNotificationState {
 }
 
 interface EnqueueResult {
-  state: ExternalNotificationState;
+  state: ReminderState;
   accepted: boolean;
 }
 
@@ -48,7 +48,7 @@ const maxItems = 20;
 const maxVisibleLayers = 4;
 const typewriterIntervalMs = 28;
 
-export function createExternalNotificationState(): ExternalNotificationState {
+export function createReminderState(): ReminderState {
   return {
     items: [],
     nextId: 1,
@@ -58,20 +58,20 @@ export function createExternalNotificationState(): ExternalNotificationState {
   };
 }
 
-export function normalizeExternalNotification(
-  payload: ExternalNotificationPayload,
-): ExternalNotificationPayload | null {
+export function normalizeReminder(
+  payload: ReminderPayload,
+): ReminderPayload | null {
   const title = truncateGraphemes(normalizeInline(payload.title ?? ""), titleLimit) || null;
   const text = truncateGraphemes(normalizeBody(payload.text), bodyLimit);
   return text ? { title, text, tone: payload.tone === "error" ? "error" : "normal" } : null;
 }
 
-export function enqueueExternalNotification(
-  state: ExternalNotificationState,
-  payload: ExternalNotificationPayload,
+export function enqueueReminder(
+  state: ReminderState,
+  payload: ReminderPayload,
   now: number,
 ): EnqueueResult {
-  const normalized = normalizeExternalNotification(payload);
+  const normalized = normalizeReminder(payload);
   if (!normalized) {
     return { state, accepted: false };
   }
@@ -115,7 +115,7 @@ export function enqueueExternalNotification(
       nextId,
       expiresAt:
         duplicateIndex === 0 && state.presenting
-          ? now + externalNotificationDurationMs(items[0]!.tone)
+          ? now + reminderDurationMs(items[0]!.tone)
           : state.expiresAt,
       pausedAt:
         duplicateIndex === 0 && state.pausedAt !== null ? now : state.pausedAt,
@@ -123,10 +123,10 @@ export function enqueueExternalNotification(
   };
 }
 
-export function startExternalNotifications(
-  state: ExternalNotificationState,
+export function startReminders(
+  state: ReminderState,
   now: number,
-): ExternalNotificationState {
+): ReminderState {
   const current = state.items[0];
   if (!current || state.presenting) {
     return state;
@@ -135,25 +135,25 @@ export function startExternalNotifications(
     ...state,
     items: [{ ...current, revealedAt: now }, ...state.items.slice(1)],
     presenting: true,
-    expiresAt: now + externalNotificationDurationMs(current.tone),
+    expiresAt: now + reminderDurationMs(current.tone),
     pausedAt: null,
   };
 }
 
-export function pauseExternalNotifications(
-  state: ExternalNotificationState,
+export function pauseReminders(
+  state: ReminderState,
   now: number,
-): ExternalNotificationState {
+): ReminderState {
   if (!state.presenting || state.pausedAt !== null) {
     return state;
   }
   return { ...state, pausedAt: now };
 }
 
-export function resumeExternalNotifications(
-  state: ExternalNotificationState,
+export function resumeReminders(
+  state: ReminderState,
   now: number,
-): ExternalNotificationState {
+): ReminderState {
   if (state.pausedAt === null) {
     return state;
   }
@@ -176,9 +176,9 @@ export function resumeExternalNotifications(
   };
 }
 
-export function completeExternalNotificationReveal(
-  state: ExternalNotificationState,
-): ExternalNotificationState {
+export function completeReminderReveal(
+  state: ReminderState,
+): ReminderState {
   const current = state.items[0];
   if (!current) {
     return state;
@@ -189,10 +189,10 @@ export function completeExternalNotificationReveal(
   };
 }
 
-export function advanceExternalNotification(
-  state: ExternalNotificationState,
+export function advanceReminder(
+  state: ReminderState,
   now: number,
-): ExternalNotificationState {
+): ReminderState {
   const items = state.items.slice(1);
   if (items.length === 0) {
     return { ...state, items, presenting: false, expiresAt: null, pausedAt: null };
@@ -202,19 +202,19 @@ export function advanceExternalNotification(
     ...state,
     items: [current, ...items.slice(1)],
     presenting: true,
-    expiresAt: now + externalNotificationDurationMs(current.tone),
+    expiresAt: now + reminderDurationMs(current.tone),
     pausedAt: null,
   };
 }
 
-export function clearExternalNotifications(
-  state: ExternalNotificationState,
-): ExternalNotificationState {
-  return { ...createExternalNotificationState(), nextId: state.nextId };
+export function clearReminders(
+  state: ReminderState,
+): ReminderState {
+  return { ...createReminderState(), nextId: state.nextId };
 }
 
-export function externalNotificationsExpired(
-  state: ExternalNotificationState,
+export function remindersExpired(
+  state: ReminderState,
   now: number,
 ): boolean {
   return (
@@ -225,15 +225,15 @@ export function externalNotificationsExpired(
   );
 }
 
-export function externalNotificationRevealComplete(
-  item: ExternalNotificationItem,
+export function reminderRevealComplete(
+  item: ReminderItem,
   now: number,
 ): boolean {
-  return visibleExternalNotificationText(item, now) === item.text;
+  return visibleReminderText(item, now) === item.text;
 }
 
-export function visibleExternalNotificationText(
-  item: ExternalNotificationItem,
+export function visibleReminderText(
+  item: ReminderItem,
   now: number,
 ): string {
   if (item.revealedAt === null) {
@@ -247,18 +247,18 @@ export function visibleExternalNotificationText(
   return graphemes.slice(0, count).join("");
 }
 
-export function externalNotificationCountLabel(count: number): string {
+export function reminderCountLabel(count: number): string {
   if (count <= 1) {
     return "";
   }
   return count >= 100 ? "×99+" : `×${count}`;
 }
 
-export function externalNotificationLayerCount(state: ExternalNotificationState): number {
+export function reminderLayerCount(state: ReminderState): number {
   return Math.min(maxVisibleLayers, state.items.length);
 }
 
-export function externalNotificationDurationMs(tone: PetNotificationTone): number {
+export function reminderDurationMs(tone: PetNotificationTone): number {
   return tone === "error" ? 8000 : 4000;
 }
 

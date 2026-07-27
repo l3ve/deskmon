@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  createExternalNotificationLayout,
-  externalNotificationDialogHeight,
-  externalNotificationDialogWidth,
-} from "./externalNotificationPresentation";
+  createReminderLayout,
+  reminderDialogHeight,
+  reminderDialogWidth,
+} from "./layout";
 
 const monitor = {
   name: "main",
@@ -13,14 +13,14 @@ const monitor = {
   scaleFactor: 1,
 };
 
-describe("external notification layout", () => {
+describe("reminder presentation layout", () => {
   it("reserves the design footprint for the pixel bubble and its physical stack", () => {
-    expect(externalNotificationDialogWidth).toBe(360);
-    expect(externalNotificationDialogHeight).toBe(152);
+    expect(reminderDialogWidth).toBe(360);
+    expect(reminderDialogHeight).toBe(152);
   });
 
   it("keeps the pet in place and prefers the right side", () => {
-    const layout = createExternalNotificationLayout({
+    const layout = createReminderLayout({
       petPosition: { x: 200, y: 200 },
       petDimensions: { width: 104, height: 104 },
       petWindowDimensions: { width: 104, height: 104 },
@@ -34,7 +34,7 @@ describe("external notification layout", () => {
   });
 
   it("uses the measured dialog height without moving the pet anchor", () => {
-    const layout = createExternalNotificationLayout({
+    const layout = createReminderLayout({
       petPosition: { x: 200, y: 200 },
       petDimensions: { width: 104, height: 104 },
       petWindowDimensions: { width: 104, height: 104 },
@@ -50,7 +50,7 @@ describe("external notification layout", () => {
 
   it("keeps a side placement clear of the pet along the bottom screen edge", () => {
     for (const notificationHeight of [152, 220]) {
-      const layout = createExternalNotificationLayout({
+      const layout = createReminderLayout({
         petPosition: { x: 500, y: 756 },
         petDimensions: { width: 104, height: 104 },
         petWindowDimensions: { width: 104, height: 104 },
@@ -66,7 +66,7 @@ describe("external notification layout", () => {
   });
 
   it("falls back to the left near the right screen edge", () => {
-    const layout = createExternalNotificationLayout({
+    const layout = createReminderLayout({
       petPosition: { x: 1320, y: 300 },
       petDimensions: { width: 104, height: 104 },
       petWindowDimensions: { width: 104, height: 104 },
@@ -85,7 +85,7 @@ describe("external notification layout", () => {
       size: { width: 320, height: 800 },
       workArea: { x: 0, y: 0, width: 320, height: 760 },
     };
-    const layout = createExternalNotificationLayout({
+    const layout = createReminderLayout({
       petPosition: { x: 108, y: 100 },
       petDimensions: { width: 104, height: 104 },
       petWindowDimensions: { width: 104, height: 104 },
@@ -98,7 +98,7 @@ describe("external notification layout", () => {
   });
 
   it("keeps the current side while dragging", () => {
-    const layout = createExternalNotificationLayout({
+    const layout = createReminderLayout({
       petPosition: { x: 1320, y: 300 },
       petDimensions: { width: 104, height: 104 },
       petWindowDimensions: { width: 104, height: 104 },

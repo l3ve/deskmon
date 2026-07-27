@@ -2,14 +2,15 @@
 
 ## Key Files
 
-- `src/pet.ts`: 桌宠控制器，负责拖拽、移动循环、单次倒计时 mood、统一提醒呈现和原生小菜单。
+- `src/pet.ts`: 桌宠控制器，负责拖拽、移动循环、单次倒计时 mood、统一提醒事件接入和原生小菜单。
 - `src/pet/activityCadence.ts`: 桌宠活动节奏策略，集中管理安静/标准/活泼的速度、run 概率、休息窗口、到达阈值和状态切换节奏常量。
 - `src/pet/cursorInteraction.ts`: 鼠标互动纯逻辑状态机，负责快速移动判定、注意、短追逐、观察、冷却、边界和阻塞规则。
 - `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
-- `src/pet/externalNotificationState.ts`: 统一提醒的 FIFO、去重、20 条容量、4 层视觉和暂停/逐字规则。
-- `src/pet/externalNotificationDialog.ts`: 统一提醒 DOM、最终正文高度测量、逐字正文更新和可访问性状态。
-- `src/pet/externalNotificationFrame.ts`: 统一提醒的动态像素 SVG 外框、尖角和叠卡几何。
-- `src/pet/externalNotificationPresentation.ts`: 保持宠物锚点不动时，按右、左、下选择 RPG 对话布局。
+- `src/pet/reminderPresentation/session.ts`: 统一提醒呈现会话的唯一公开 Interface，负责完整生命周期和原生窗口投影。
+- `src/pet/reminderPresentation/state.ts`: 会话内部 FIFO、去重、20 条容量、4 层视觉和逐字计时 Implementation。
+- `src/pet/reminderPresentation/dialog.ts`: 会话内部 DOM Adapter，负责最终正文高度测量、呈现和交互事件。
+- `src/pet/reminderPresentation/frame.ts`: 会话内部动态像素 SVG 外框、尖角和叠卡几何。
+- `src/pet/reminderPresentation/layout.ts`: 会话内部布局 Implementation，保持桌宠锚点并按右、左、下选择位置。
 - `src/settings.ts`: 设置窗口前端，负责桌宠、单次倒计时、截图、CLI 安装状态和活动区域配置。
 - `src/pet/slime.ts`: 默认史莱姆 sprite sheet 加载、逐帧裁剪、锚点归一化和代码绘制兜底。
 - `src/assets/slime/*.png`: 默认史莱姆 7 个状态的 sprite sheet 素材。
@@ -92,7 +93,7 @@
 - 默认桌宠角色素材与应用 icon 保持一致：淡紫白小幽灵/软团子角色，替换时仍放在 `src/assets/slime/*.png` 并保持原 sprite sheet 布局。
 - 桌宠动画优化的下一步边界是先调代码节奏：以标准档为主手感，同步校准安静/活泼，不新增状态、不改 PNG 素材、不加新设置。
 - 桌宠活动档位参数从 `pet.ts` 移到 `src/pet/activityCadence.ts`；到达目标后的休息会保留本轮选中的 `idle`/`sleep`，避免 `sleep` 只闪一帧。
-- 桌宠前端保持模块边界：`pet.ts` 做控制器，sprite 放 `slime.ts`，提醒状态与布局放 `externalNotification*`，坐标算法放 `geometry.ts`。
+- 桌宠前端保持 Module 边界：`pet.ts` 只传提醒、锚点和暂停事件；统一提醒完整会话放在 `reminderPresentation/`。
 - Tauri 后端保持模块边界：`lib.rs` 只做 command、窗口/菜单和应用编排；屏幕/活动区域算法放 `geometry.rs`，settings 类型和持久化放 `settings.rs`。
 - `src-tauri/icons` 只保留 `tauri.conf.json` 的 `bundle.icon` 声明项：`32x32.png`、`128x128.png`、`128x128@2x.png`、`icon.icns`、`icon.ico`。
 - `idle/sleep/timer-waiting/celebrate/dragged` 当前按 6x1 切帧，`walk/run` 按 6x2 切帧。
@@ -111,6 +112,8 @@
 - 普通/成功消息 4 秒并使用常态尺寸 `celebrate`，错误 8 秒并保持 `idle`；所有正文使用逐字动画。
 - 统一提醒先用完整最终正文测量一次目标高度，再播放逐字动画；高度按 4px 像素栅格扩展且最小保持 152px，避免逐字过程抖动和多行截断。
 - 对话框按右、左、下选择位置并限制在显示器 work area；悬停、拖拽和截图会暂停或延迟展示。
+- 统一提醒暂停使用原因集合；悬停、拖拽和截图条件全部解除后才能恢复计时与逐字呈现。
+- 统一提醒扩展与恢复常态窗口共用单条串行投影通道；过期中间布局合并，最终恢复不能被旧请求覆盖。
 - 对话框候选位置要先 clamp 到 work area，再按与宠物保持 14px 间距筛选；屏幕下沿允许左右对话框纵向上移，不能因原始矩形越界误退到下方。
 - 单次倒计时只保留未运行/运行中，默认 30 分钟、范围 1-180；自然结束提示，取消和退出保持安静。
 - 旧 `focusTimer.focusMinutes` 只在迁移时读取，排序后的中间值成为新的 `countdown.minutes`。

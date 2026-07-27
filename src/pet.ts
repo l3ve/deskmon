@@ -29,28 +29,12 @@ import {
   type CursorInteractionState,
 } from "./pet/cursorInteraction";
 import {
-  createExternalNotificationDialog,
-  type ExternalNotificationDialogController,
-} from "./pet/externalNotificationDialog";
-import {
-  createExternalNotificationLayout,
-  type ExternalNotificationLayout,
-} from "./pet/externalNotificationPresentation";
-import {
-  advanceExternalNotification,
-  clearExternalNotifications,
-  completeExternalNotificationReveal,
-  createExternalNotificationState,
-  enqueueExternalNotification,
-  externalNotificationLayerCount,
-  externalNotificationRevealComplete,
-  externalNotificationsExpired,
-  pauseExternalNotifications,
-  resumeExternalNotifications,
-  startExternalNotifications,
-  type ExternalNotificationPayload,
-  type ExternalNotificationState,
-} from "./pet/externalNotificationState";
+  createReminderPresentationSession,
+  type ReminderPayload,
+  type ReminderPresentationEnvironment,
+  type ReminderPresentationSession,
+  type ReminderPresentationStatus,
+} from "./pet/reminderPresentation/session";
 import { spriteSlimeSkin, type PetFacing, type PetMood, type PetSkin } from "./pet/slime";
 import type {
   BootstrapPayload,
@@ -68,7 +52,6 @@ interface DragState {
   startScreen: Point;
   offset: Point;
   active: boolean;
-  fromDialog: boolean;
 }
 
 const clickThreshold = 7;
@@ -93,9 +76,6 @@ class PetController {
     endsAtMs: null,
   };
   private drag: DragState | null = null;
-  private externalDialog: ExternalNotificationDialogController;
-  private externalLayout: ExternalNotificationLayout | null = null;
-  private externalNotifications: ExternalNotificationState = createExternalNotificationState();
   private facing: PetFacing = "right";
   private hoverFrameCheckInFlight = false;
   private isMovingFast = false;
@@ -105,14 +85,14 @@ class PetController {
   private mood: PetMood = "idle";
   private monitors: MonitorPayload[] = [];
   private moveInFlight = false;
-  private notificationPresentationInFlight = false;
   private pendingMoveTarget: Point | null = null;
-  private pendingPresentationSync = false;
   private persistAfterMove = false;
   private petDimensions: Dimensions = { width: 104, height: 104 };
   private petWindowDimensions: Dimensions = { width: 104, height: 104 };
   private pointerOverPet = false;
   private position: Point = { x: 0, y: 0 };
+  private reminderPresentation: ReminderPresentationSession;
+  private reminderStatus: ReminderPresentationStatus = { active: false, tone: null };
   private restMood: RestMood = "idle";
   private restUntil = 0;
   private screenshotActive = false;
@@ -131,8 +111,18 @@ class PetController {
     private readonly root: HTMLElement,
     private readonly canvas: HTMLCanvasElement,
   ) {
-    this.externalDialog = createExternalNotificationDialog();
-    this.root.append(this.externalDialog.element);
+    this.reminderPresentation = createReminderPresentationSession({
+      root,
+      canvas,
+      onStatusChanged: (status) => {
+        const wasActive = this.reminderStatus.active;
+        this.reminderStatus = status;
+        this.invalidateCursorInteraction();
+        if (wasActive && !status.active && this.persistAfterMove) {
+          this.requestWindowMove(this.position, true);
+        }
+      },
+    });
     this.canvas.addEventListener("pointerenter", () => {
       this.pointerOverPet = true;
       this.invalidateCursorInteraction();
@@ -140,20 +130,6 @@ class PetController {
     this.canvas.addEventListener("pointerleave", () => {
       this.pointerOverPet = false;
       this.suppressCursorInteraction(cursorInteractionCadence.pointerExitProtectionMs);
-    });
-    this.externalDialog.element.addEventListener("pointerenter", () => {
-      this.externalNotifications = pauseExternalNotifications(
-        this.externalNotifications,
-        performance.now(),
-      );
-    });
-    this.externalDialog.element.addEventListener("pointerleave", () => {
-      if (!this.drag) {
-        this.externalNotifications = resumeExternalNotifications(
-          this.externalNotifications,
-          performance.now(),
-        );
-      }
     });
     this.root.addEventListener("pointerdown", (event) => this.onPointerDown(event));
     this.root.addEventListener("pointermove", (event) => this.onPointerMove(event));
@@ -181,16 +157,8 @@ class PetController {
         this.settings.movementPaused = event.payload;
       }
     });
-    void listen<ExternalNotificationPayload>("deskmon-pet-notification", (event) => {
-      const result = enqueueExternalNotification(
-        this.externalNotifications,
-        event.payload,
-        performance.now(),
-      );
-      this.externalNotifications = result.state;
-      if (result.accepted && !this.drag && !this.screenshotActive) {
-        this.beginNotifications();
-      }
+    void listen<ReminderPayload>("deskmon-pet-notification", (event) => {
+      this.reminderPresentation.receive(event.payload);
     });
     void listen<CountdownSnapshot>("deskmon-countdown-changed", (event) => {
       this.countdown = event.payload;
@@ -199,34 +167,21 @@ class PetController {
     void listen<boolean>("deskmon-screenshot-state-changed", (event) => {
       this.screenshotActive = event.payload;
       if (event.payload) {
-        this.externalNotifications = pauseExternalNotifications(
-          this.externalNotifications,
-          performance.now(),
-        );
+        this.reminderPresentation.pause("screenshot");
       } else {
-        this.externalNotifications = resumeExternalNotifications(
-          this.externalNotifications,
-          performance.now(),
-        );
-        this.beginNotifications();
+        this.reminderPresentation.resume("screenshot");
       }
     });
     void listen<boolean>("deskmon-visibility-changed", (event) => {
       if (this.settings) {
         this.settings.petVisible = event.payload;
       }
-      if (!event.payload) {
-        this.externalNotifications = clearExternalNotifications(this.externalNotifications);
-        this.finishNotifications(true);
-      }
+      this.syncReminderAnchor();
     });
     void listen("deskmon-settings-changed", async () => {
       this.applyBootstrap(await invoke<BootstrapPayload>("get_desktop_snapshot"));
       this.resizeCanvas();
       this.pickTarget();
-      if (this.externalNotifications.presenting) {
-        this.syncNotificationPresentation();
-      }
     });
   }
 
@@ -238,14 +193,13 @@ class PetController {
     this.petWindowDimensions = bootstrap.petWindowDimensions;
     this.position = bootstrap.petPosition;
     this.countdown = bootstrap.countdown;
+    this.syncReminderAnchor();
   }
 
   private resizeCanvas(): void {
     const dpr = window.devicePixelRatio || 1;
     this.canvas.style.width = `${this.petDimensions.width}px`;
     this.canvas.style.height = `${this.petDimensions.height}px`;
-    this.canvas.style.left = `${this.externalLayout?.petOffset.x ?? 0}px`;
-    this.canvas.style.top = `${this.externalLayout?.petOffset.y ?? 0}px`;
     const width = Math.max(1, Math.round(this.petDimensions.width * dpr));
     const height = Math.max(1, Math.round(this.petDimensions.height * dpr));
     if (this.canvas.width !== width || this.canvas.height !== height) {
@@ -257,9 +211,7 @@ class PetController {
   private tick(time: number): void {
     const dtSeconds = Math.min(0.05, (time - this.lastFrameTime) / 1000);
     this.lastFrameTime = time;
-    this.updateNotificationLifetime(time);
     this.updateMovement(time, dtSeconds);
-    this.renderNotification(time);
     this.draw(time);
     requestAnimationFrame((nextTime) => this.tick(nextTime));
   }
@@ -274,9 +226,8 @@ class PetController {
       this.mood = "dragged";
       return;
     }
-    if (this.externalNotifications.presenting) {
-      this.mood =
-        this.externalNotifications.items[0]?.tone === "error" ? "idle" : "celebrate";
+    if (this.reminderStatus.active) {
+      this.mood = this.reminderStatus.tone === "error" ? "idle" : "celebrate";
       return;
     }
     if (this.countdown.isRunning) {
@@ -296,7 +247,7 @@ class PetController {
       return;
     }
     if (time < this.restUntil) {
-      if (!this.externalNotifications.presenting) {
+      if (!this.reminderStatus.active) {
         this.mood = this.countdown.isRunning ? "timer-waiting" : this.restMood;
       }
       return;
@@ -315,7 +266,7 @@ class PetController {
     const next = moveTowards(this.position, this.target, speed * dtSeconds);
     this.updateFacing(next.x - this.position.x);
     this.position = clampPointToRect(next, this.activityArea, this.petWindowDimensions);
-    if (!this.externalNotifications.presenting) {
+    if (!this.reminderStatus.active) {
       this.mood = this.countdown.isRunning
         ? "timer-waiting"
         : this.isMovingFast
@@ -325,158 +276,21 @@ class PetController {
     this.syncWindowPosition(time);
   }
 
-  private beginNotifications(): void {
-    if (
-      this.drag ||
-      this.screenshotActive ||
-      this.externalNotifications.items.length === 0
-    ) {
+  private syncReminderAnchor(): void {
+    const settings = this.settings;
+    if (!settings) {
       return;
     }
-    this.externalNotifications = startExternalNotifications(
-      this.externalNotifications,
-      performance.now(),
-    );
-    this.invalidateCursorInteraction();
-    this.syncNotificationPresentation();
-  }
-
-  private updateNotificationLifetime(time: number): void {
-    if (!externalNotificationsExpired(this.externalNotifications, time)) {
-      return;
-    }
-    this.externalNotifications = advanceExternalNotification(this.externalNotifications, time);
-    if (this.externalNotifications.presenting) {
-      this.syncNotificationPresentation();
-    } else {
-      this.finishNotifications(false);
-    }
-  }
-
-  private renderNotification(time: number): void {
-    if (!this.externalNotifications.presenting) {
-      return;
-    }
-    this.externalDialog.render(
-      this.externalNotifications.items[0] ?? null,
-      externalNotificationLayerCount(this.externalNotifications),
-      this.externalNotifications.pausedAt ?? time,
-    );
-  }
-
-  private handleNotificationClick(): void {
-    const current = this.externalNotifications.items[0];
-    if (!current) {
-      return;
-    }
-    const now = performance.now();
-    const revealTime = this.externalNotifications.pausedAt ?? now;
-    if (!externalNotificationRevealComplete(current, revealTime)) {
-      this.externalNotifications = completeExternalNotificationReveal(
-        this.externalNotifications,
-      );
-      return;
-    }
-    this.externalNotifications = advanceExternalNotification(this.externalNotifications, now);
-    if (this.externalNotifications.presenting) {
-      if (this.externalDialog.element.matches(":hover")) {
-        this.externalNotifications = pauseExternalNotifications(
-          this.externalNotifications,
-          now,
-        );
-      }
-      this.syncNotificationPresentation();
-    } else {
-      this.finishNotifications(false);
-    }
-  }
-
-  private syncNotificationPresentation(): void {
-    if (!this.externalNotifications.presenting) {
-      return;
-    }
-    const current = this.externalNotifications.items[0];
-    if (!current) {
-      return;
-    }
-    const layerCount = externalNotificationLayerCount(this.externalNotifications);
-    const notificationHeight = this.externalDialog.measureHeight(current, layerCount);
-    const layout = createExternalNotificationLayout({
+    const environment: ReminderPresentationEnvironment = {
       petPosition: this.position,
       petDimensions: this.petDimensions,
       petWindowDimensions: this.petWindowDimensions,
       monitors: this.monitors,
       fallbackArea: this.activityArea,
-      notificationHeight,
-      lockedPlacement: this.drag?.active
-        ? this.externalLayout?.notificationPlacement
-        : undefined,
-    });
-    this.externalLayout = layout;
-    this.resizeCanvas();
-    const style = this.externalDialog.element.style;
-    style.left = `${layout.notificationOffset.x}px`;
-    style.top = `${layout.notificationOffset.y}px`;
-    style.width = `${layout.notificationDimensions.width}px`;
-    style.height = `${layout.notificationDimensions.height}px`;
-    this.externalDialog.setPlacement(layout.notificationPlacement);
-    this.externalDialog.render(
-      current,
-      layerCount,
-      this.externalNotifications.pausedAt ?? performance.now(),
-    );
-    this.pendingPresentationSync = true;
-    this.flushNotificationPresentation();
-  }
-
-  private flushNotificationPresentation(): void {
-    if (this.notificationPresentationInFlight || !this.pendingPresentationSync) {
-      return;
-    }
-    const layout = this.externalLayout;
-    if (!layout) {
-      this.pendingPresentationSync = false;
-      return;
-    }
-    this.pendingPresentationSync = false;
-    this.notificationPresentationInFlight = true;
-    invoke("set_pet_temporary_presentation", {
-      x: layout.windowPosition.x,
-      y: layout.windowPosition.y,
-      width: layout.windowLogicalDimensions.width,
-      height: layout.windowLogicalDimensions.height,
-      alwaysOnTop: true,
-      visible: true,
-      ignoreCursorEvents: false,
-    })
-      .catch(() => {
-        // Keep the queue alive if a transient native resize fails.
-      })
-      .finally(() => {
-        this.notificationPresentationInFlight = false;
-        if (this.pendingPresentationSync) {
-          this.flushNotificationPresentation();
-        }
-      });
-  }
-
-  private finishNotifications(forceHidden: boolean): void {
-    this.externalDialog.clear();
-    this.externalLayout = null;
-    this.resizeCanvas();
-    void invoke("set_pet_temporary_presentation", {
-      x: this.position.x,
-      y: this.position.y,
-      width: this.petDimensions.width,
-      height: this.petDimensions.height,
-      alwaysOnTop: this.settings?.alwaysOnTop ?? true,
-      visible: !forceHidden && (this.settings?.petVisible ?? true),
-      ignoreCursorEvents: false,
-    });
-    if (!forceHidden) {
-      this.requestWindowMove(this.position, true);
-    }
-    this.invalidateCursorInteraction();
+      alwaysOnTop: settings.alwaysOnTop,
+      visible: settings.petVisible,
+    };
+    this.reminderPresentation.anchorChanged(environment);
   }
 
   private coordinateScale(): number {
@@ -524,10 +338,10 @@ class PetController {
   }
 
   private requestWindowMove(point: Point, persistAfterMove = false): void {
-    if (this.externalNotifications.presenting) {
+    if (this.reminderStatus.active) {
       this.position = { ...point };
       this.persistAfterMove ||= persistAfterMove;
-      this.syncNotificationPresentation();
+      this.syncReminderAnchor();
       return;
     }
     this.pendingMoveTarget = { ...point };
@@ -567,7 +381,7 @@ class PetController {
       screenshotActive: this.screenshotActive,
       dragActive: this.drag !== null,
       pointerOverPet: this.pointerOverPet,
-      presentationActive: this.externalNotifications.presenting,
+      presentationActive: this.reminderStatus.active,
       suppressionActive: time < this.cursorInteractionSuppressedUntil,
     });
   }
@@ -738,9 +552,9 @@ class PetController {
         x: fallbackCursor.x - this.position.x,
         y: fallbackCursor.y - this.position.y,
       },
-      fromDialog: this.externalDialog.element.contains(event.target as Node),
     };
     this.drag = drag;
+    this.reminderPresentation.pause("drag");
     void invoke<WindowFramePayload>("get_pet_window_frame")
       .then((frame) => {
         if (this.drag !== drag || drag.active) {
@@ -755,12 +569,6 @@ class PetController {
       .catch(() => {
         // Screen coordinates already provide a usable drag fallback.
       });
-    if (this.externalNotifications.presenting) {
-      this.externalNotifications = pauseExternalNotifications(
-        this.externalNotifications,
-        performance.now(),
-      );
-    }
   }
 
   private onPointerMove(event: PointerEvent): void {
@@ -778,7 +586,7 @@ class PetController {
         x: screen.x - this.drag.offset.x,
         y: screen.y - this.drag.offset.y,
       };
-      this.position = this.externalNotifications.presenting
+      this.position = this.reminderStatus.active
         ? clampPointToRect(next, this.activityArea, this.petWindowDimensions)
         : next;
       this.requestWindowMove(this.position);
@@ -789,15 +597,13 @@ class PetController {
     if (!this.drag || this.drag.pointerId !== event.pointerId) {
       return;
     }
-    const { active, fromDialog } = this.drag;
+    const { active } = this.drag;
     const finalPosition = { ...this.position };
     this.finishDrag();
     if (active) {
       this.requestWindowMove(finalPosition, true);
       this.restUntil = performance.now() + petCadence.dragReleaseRestMs;
       this.pickTarget();
-    } else if (fromDialog) {
-      this.handleNotificationClick();
     }
   }
 
@@ -810,13 +616,7 @@ class PetController {
       }
     }
     this.drag = null;
-    if (!this.externalDialog.element.matches(":hover")) {
-      this.externalNotifications = resumeExternalNotifications(
-        this.externalNotifications,
-        performance.now(),
-      );
-    }
-    this.beginNotifications();
+    this.reminderPresentation.resume("drag");
   }
 
   private draw(time: number): void {

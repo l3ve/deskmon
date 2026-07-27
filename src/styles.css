@@ -57,7 +57,7 @@ button {
   cursor: grabbing;
 }
 
-.external-notifications {
+.reminder-presentation {
   --notification-outline: #4b3a7c;
   --notification-surface: #f9f8ff;
   --notification-highlight: #ffffff;
@@ -77,20 +77,20 @@ button {
   pointer-events: auto;
 }
 
-.external-notifications:active {
+.reminder-presentation:active {
   cursor: grabbing;
 }
 
-.external-notifications[hidden] {
+.reminder-presentation[hidden] {
   display: none;
 }
 
-.external-notifications[data-measuring="true"] {
+.reminder-presentation[data-measuring="true"] {
   visibility: hidden;
   pointer-events: none;
 }
 
-.external-notification-frame {
+.reminder-frame {
   position: absolute;
   inset: 0;
   z-index: 0;
@@ -101,102 +101,102 @@ button {
   shape-rendering: crispEdges;
 }
 
-.external-notification-frame-group,
-.external-notification-frame-shadow,
-.external-notification-frame-layer {
+.reminder-frame-group,
+.reminder-frame-shadow,
+.reminder-frame-layer {
   display: none;
 }
 
-.external-notifications[data-placement="right"]
-  .external-notification-frame-group[data-placement="right"],
-.external-notifications[data-placement="left"]
-  .external-notification-frame-group[data-placement="left"],
-.external-notifications[data-placement="below"]
-  .external-notification-frame-group[data-placement="below"] {
+.reminder-presentation[data-placement="right"]
+  .reminder-frame-group[data-placement="right"],
+.reminder-presentation[data-placement="left"]
+  .reminder-frame-group[data-placement="left"],
+.reminder-presentation[data-placement="below"]
+  .reminder-frame-group[data-placement="below"] {
   display: block;
 }
 
-.external-notifications[data-layers="1"]
-  .external-notification-frame-shadow[data-layers="1"],
-.external-notifications[data-layers="2"]
-  .external-notification-frame-shadow[data-layers="2"],
-.external-notifications[data-layers="3"]
-  .external-notification-frame-shadow[data-layers="3"],
-.external-notifications[data-layers="4"]
-  .external-notification-frame-shadow[data-layers="4"] {
+.reminder-presentation[data-layers="1"]
+  .reminder-frame-shadow[data-layers="1"],
+.reminder-presentation[data-layers="2"]
+  .reminder-frame-shadow[data-layers="2"],
+.reminder-presentation[data-layers="3"]
+  .reminder-frame-shadow[data-layers="3"],
+.reminder-presentation[data-layers="4"]
+  .reminder-frame-shadow[data-layers="4"] {
   display: block;
   fill: rgba(36, 28, 59, 0.25);
 }
 
-.external-notifications[data-layers="2"]
-  .external-notification-frame-layer[data-depth="1"],
-.external-notifications[data-layers="3"]
-  .external-notification-frame-layer[data-depth="1"],
-.external-notifications[data-layers="3"]
-  .external-notification-frame-layer[data-depth="2"],
-.external-notifications[data-layers="4"]
-  .external-notification-frame-layer[data-depth="1"],
-.external-notifications[data-layers="4"]
-  .external-notification-frame-layer[data-depth="2"],
-.external-notifications[data-layers="4"]
-  .external-notification-frame-layer[data-depth="3"] {
+.reminder-presentation[data-layers="2"]
+  .reminder-frame-layer[data-depth="1"],
+.reminder-presentation[data-layers="3"]
+  .reminder-frame-layer[data-depth="1"],
+.reminder-presentation[data-layers="3"]
+  .reminder-frame-layer[data-depth="2"],
+.reminder-presentation[data-layers="4"]
+  .reminder-frame-layer[data-depth="1"],
+.reminder-presentation[data-layers="4"]
+  .reminder-frame-layer[data-depth="2"],
+.reminder-presentation[data-layers="4"]
+  .reminder-frame-layer[data-depth="3"] {
   display: block;
 }
 
-.external-notification-frame-layer[data-depth="1"]
-  .external-notification-frame-layer-outline {
+.reminder-frame-layer[data-depth="1"]
+  .reminder-frame-layer-outline {
   fill: #b5a9df;
 }
 
-.external-notification-frame-layer[data-depth="1"]
-  .external-notification-frame-layer-surface {
+.reminder-frame-layer[data-depth="1"]
+  .reminder-frame-layer-surface {
   fill: #ded9f3;
 }
 
-.external-notification-frame-layer[data-depth="2"]
-  .external-notification-frame-layer-outline {
+.reminder-frame-layer[data-depth="2"]
+  .reminder-frame-layer-outline {
   fill: #8f7cc4;
 }
 
-.external-notification-frame-layer[data-depth="2"]
-  .external-notification-frame-layer-surface {
+.reminder-frame-layer[data-depth="2"]
+  .reminder-frame-layer-surface {
   fill: #b5a9df;
 }
 
-.external-notification-frame-layer[data-depth="3"]
-  .external-notification-frame-layer-outline {
+.reminder-frame-layer[data-depth="3"]
+  .reminder-frame-layer-outline {
   fill: var(--notification-outline);
 }
 
-.external-notification-frame-layer[data-depth="3"]
-  .external-notification-frame-layer-surface {
+.reminder-frame-layer[data-depth="3"]
+  .reminder-frame-layer-surface {
   fill: var(--notification-accent);
 }
 
-.external-notification-frame-main-outline {
+.reminder-frame-main-outline {
   fill: var(--notification-outline);
 }
 
-.external-notification-frame-main-surface {
+.reminder-frame-main-surface {
   fill: var(--notification-surface);
 }
 
-.external-notification-frame-highlight,
-.external-notification-frame-inset {
+.reminder-frame-highlight,
+.reminder-frame-inset {
   fill: none;
   stroke-width: 2px;
   vector-effect: non-scaling-stroke;
 }
 
-.external-notification-frame-highlight {
+.reminder-frame-highlight {
   stroke: var(--notification-highlight);
 }
 
-.external-notification-frame-inset {
+.reminder-frame-inset {
   stroke: var(--notification-inset);
 }
 
-.external-notification-card {
+.reminder-card {
   position: absolute;
   z-index: 2;
   top: var(--notification-card-y);
@@ -212,14 +212,14 @@ button {
   background: transparent;
 }
 
-.external-notifications[data-measuring="true"] .external-notification-card {
+.reminder-presentation[data-measuring="true"] .reminder-card {
   grid-template-rows: auto auto;
   height: auto;
   min-height: 116px;
   overflow: visible;
 }
 
-.external-notifications[data-tone="error"] {
+.reminder-presentation[data-tone="error"] {
   --notification-outline: #8f3f4b;
   --notification-inset: #efc6ca;
   --notification-accent: #d46666;
@@ -228,27 +228,27 @@ button {
   --notification-muted: #8c5860;
 }
 
-.external-notifications[data-placement="left"] {
+.reminder-presentation[data-placement="left"] {
   --notification-card-x: 0px;
 }
 
-.external-notifications[data-placement="below"] {
+.reminder-presentation[data-placement="below"] {
   --notification-card-y: 12px;
 }
 
-.external-notification-header {
+.reminder-header {
   display: flex;
   align-items: center;
   min-height: 24px;
   gap: 8px;
 }
 
-.external-notification-header[hidden] {
+.reminder-header[hidden] {
   display: none;
 }
 
-.external-notification-title,
-.external-notification-count {
+.reminder-title,
+.reminder-count {
   display: inline-flex;
   align-items: center;
   min-height: 22px;
@@ -278,25 +278,25 @@ button {
   );
 }
 
-.external-notification-title {
+.reminder-title {
   max-width: 208px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.external-notification-count {
+.reminder-count {
   margin-left: auto;
   color: var(--notification-outline);
   background: var(--notification-accent-soft);
   font-variant-numeric: tabular-nums;
 }
 
-.external-notification-title[hidden],
-.external-notification-count[hidden] {
+.reminder-title[hidden],
+.reminder-count[hidden] {
   display: none;
 }
 
-.external-notification-body {
+.reminder-body {
   align-self: start;
   margin: 0;
   overflow: hidden;
@@ -308,7 +308,7 @@ button {
   overflow-wrap: anywhere;
 }
 
-.external-notification-header[hidden] + .external-notification-body {
+.reminder-header[hidden] + .reminder-body {
   align-self: center;
 }
 

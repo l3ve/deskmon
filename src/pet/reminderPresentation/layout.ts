@@ -1,19 +1,19 @@
-import type { Dimensions, MonitorPayload, Point, Rect } from "../types";
+import type { Dimensions, MonitorPayload, Point, Rect } from "../../types";
 import {
-  externalNotificationFrameMinHeight,
-  externalNotificationFrameWidth,
-} from "./externalNotificationFrame";
-import { clampPointToRect, monitorForPoint } from "./geometry";
+  reminderFrameMinHeight,
+  reminderFrameWidth,
+} from "./frame";
+import { clampPointToRect, monitorForPoint } from "../geometry";
 
-export type ExternalNotificationPlacement = "right" | "left" | "below";
+export type ReminderPlacement = "right" | "left" | "below";
 
-export interface ExternalNotificationLayout {
+export interface ReminderLayout {
   windowPosition: Point;
   windowLogicalDimensions: Dimensions;
   petOffset: Point;
   notificationOffset: Point;
   notificationDimensions: Dimensions;
-  notificationPlacement: ExternalNotificationPlacement;
+  notificationPlacement: ReminderPlacement;
 }
 
 interface CreateLayoutInput {
@@ -22,17 +22,17 @@ interface CreateLayoutInput {
   petWindowDimensions: Dimensions;
   monitors: MonitorPayload[];
   fallbackArea: Rect;
-  lockedPlacement?: ExternalNotificationPlacement;
+  lockedPlacement?: ReminderPlacement;
   notificationHeight?: number;
 }
 
 interface PhysicalRect extends Rect {}
 
-export const externalNotificationDialogWidth = externalNotificationFrameWidth;
-export const externalNotificationDialogHeight = externalNotificationFrameMinHeight;
+export const reminderDialogWidth = reminderFrameWidth;
+export const reminderDialogHeight = reminderFrameMinHeight;
 const presentationGap = 14;
 
-export function createExternalNotificationLayout({
+export function createReminderLayout({
   petPosition,
   petDimensions,
   petWindowDimensions,
@@ -40,7 +40,7 @@ export function createExternalNotificationLayout({
   fallbackArea,
   lockedPlacement,
   notificationHeight,
-}: CreateLayoutInput): ExternalNotificationLayout {
+}: CreateLayoutInput): ReminderLayout {
   const petCenter = {
     x: petPosition.x + petWindowDimensions.width * 0.5,
     y: petPosition.y + petWindowDimensions.height * 0.5,
@@ -52,10 +52,10 @@ export function createExternalNotificationLayout({
     monitor?.scaleFactor ?? petWindowDimensions.width / Math.max(1, petDimensions.width),
   );
   const notificationDimensions = {
-    width: externalNotificationDialogWidth,
+    width: reminderDialogWidth,
     height: Math.max(
-      externalNotificationDialogHeight,
-      notificationHeight ?? externalNotificationDialogHeight,
+      reminderDialogHeight,
+      notificationHeight ?? reminderDialogHeight,
     ),
   };
   const notificationPhysicalDimensions = {
@@ -102,7 +102,7 @@ function candidatePlacements(
   pet: PhysicalRect,
   dimensions: Dimensions,
   gap: number,
-): Array<{ placement: ExternalNotificationPlacement; rect: PhysicalRect }> {
+): Array<{ placement: ReminderPlacement; rect: PhysicalRect }> {
   const centerY = pet.y + pet.height * 0.5;
   const centerX = pet.x + pet.width * 0.5;
   return [

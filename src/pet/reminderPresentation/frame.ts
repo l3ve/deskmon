@@ -1,10 +1,10 @@
-import type { ExternalNotificationPlacement } from "./externalNotificationPresentation";
+import type { ReminderPlacement } from "./layout";
 
 const svgNamespace = "http://www.w3.org/2000/svg";
-export const externalNotificationFrameWidth = 360;
-export const externalNotificationFrameMinHeight = 152;
-export const externalNotificationCardMinHeight = 116;
-export const externalNotificationFrameOverhang = 36;
+export const reminderFrameWidth = 360;
+export const reminderFrameMinHeight = 152;
+export const reminderCardMinHeight = 116;
+export const reminderFrameOverhang = 36;
 const cardWidth = 312;
 const pixelGrid = 4;
 
@@ -156,7 +156,7 @@ function belowBubblePath(x: number, y: number, width: number, height: number): s
 }
 
 function bubblePath(
-  placement: ExternalNotificationPlacement,
+  placement: ReminderPlacement,
   x: number,
   y: number,
   width: number,
@@ -171,7 +171,7 @@ function bubblePath(
   return rightBubblePath(x, y, width, height);
 }
 
-function cardOrigin(placement: ExternalNotificationPlacement): CardOrigin {
+function cardOrigin(placement: ReminderPlacement): CardOrigin {
   return placement === "left"
     ? { x: 0, y: 0 }
     : placement === "below"
@@ -188,18 +188,18 @@ function appendPath(parent: SVGElement, className: string, pathData: string): SV
 
 function appendPlacementFrame(
   frame: SVGSVGElement,
-  placement: ExternalNotificationPlacement,
+  placement: ReminderPlacement,
   cardHeight: number,
 ): void {
   const origin = cardOrigin(placement);
-  const group = svgElement("g", "external-notification-frame-group");
+  const group = svgElement("g", "reminder-frame-group");
   group.dataset.placement = placement;
 
   for (let count = 1; count <= 4; count += 1) {
     const offset = placement === "below" && count === 4 ? 24 : count * 8;
     const shadow = appendPath(
       group,
-      "external-notification-frame-shadow",
+      "reminder-frame-shadow",
       pixelRectPath(origin.x + offset, origin.y + offset, cardWidth, cardHeight),
     );
     shadow.dataset.layers = String(count);
@@ -207,16 +207,16 @@ function appendPlacementFrame(
 
   for (const depth of [3, 2, 1]) {
     const offset = depth * 8;
-    const layer = svgElement("g", "external-notification-frame-layer");
+    const layer = svgElement("g", "reminder-frame-layer");
     layer.dataset.depth = String(depth);
     appendPath(
       layer,
-      "external-notification-frame-layer-outline",
+      "reminder-frame-layer-outline",
       pixelRectPath(origin.x + offset, origin.y + offset, cardWidth, cardHeight),
     );
     appendPath(
       layer,
-      "external-notification-frame-layer-surface",
+      "reminder-frame-layer-surface",
       pixelRectPath(
         origin.x + offset + 4,
         origin.y + offset + 4,
@@ -229,16 +229,16 @@ function appendPlacementFrame(
 
   appendPath(
     group,
-    "external-notification-frame-main-outline",
+    "reminder-frame-main-outline",
     bubblePath(placement, origin.x, origin.y, cardWidth, cardHeight),
   );
   appendPath(
     group,
-    "external-notification-frame-main-surface",
+    "reminder-frame-main-surface",
     bubblePath(placement, origin.x + 4, origin.y + 4, cardWidth - 8, cardHeight - 8),
   );
 
-  const highlight = svgElement("path", "external-notification-frame-highlight");
+  const highlight = svgElement("path", "reminder-frame-highlight");
   highlight.setAttribute(
     "d",
     `M${origin.x + 32} ${origin.y + 16} H${origin.x + cardWidth - 32} ` +
@@ -246,7 +246,7 @@ function appendPlacementFrame(
   );
   group.append(highlight);
 
-  const inset = svgElement("path", "external-notification-frame-inset");
+  const inset = svgElement("path", "reminder-frame-inset");
   inset.setAttribute(
     "d",
     `M${origin.x + 32} ${origin.y + cardHeight - 16} H${origin.x + cardWidth - 32} ` +
@@ -256,22 +256,22 @@ function appendPlacementFrame(
   frame.append(group);
 }
 
-export function externalNotificationFrameHeightForCardHeight(cardHeight: number): number {
+export function reminderFrameHeightForCardHeight(cardHeight: number): number {
   const normalizedCardHeight = Math.max(
-    externalNotificationCardMinHeight,
+    reminderCardMinHeight,
     Math.ceil(cardHeight / pixelGrid) * pixelGrid,
   );
-  return normalizedCardHeight + externalNotificationFrameOverhang;
+  return normalizedCardHeight + reminderFrameOverhang;
 }
 
-export function createExternalNotificationFrame(
-  requestedHeight = externalNotificationFrameMinHeight,
+export function createReminderFrame(
+  requestedHeight = reminderFrameMinHeight,
 ): SVGSVGElement {
-  const frameHeight = Math.max(externalNotificationFrameMinHeight, requestedHeight);
-  const cardHeight = frameHeight - externalNotificationFrameOverhang;
-  const frame = svgElement("svg", "external-notification-frame");
-  frame.setAttribute("viewBox", `0 0 ${externalNotificationFrameWidth} ${frameHeight}`);
-  frame.setAttribute("width", String(externalNotificationFrameWidth));
+  const frameHeight = Math.max(reminderFrameMinHeight, requestedHeight);
+  const cardHeight = frameHeight - reminderFrameOverhang;
+  const frame = svgElement("svg", "reminder-frame");
+  frame.setAttribute("viewBox", `0 0 ${reminderFrameWidth} ${frameHeight}`);
+  frame.setAttribute("width", String(reminderFrameWidth));
   frame.setAttribute("height", String(frameHeight));
   frame.setAttribute("preserveAspectRatio", "none");
   frame.setAttribute("aria-hidden", "true");
