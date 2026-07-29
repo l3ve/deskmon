@@ -8,6 +8,7 @@ import {
   type ReminderPresentationEnvironment,
   type ReminderPresentationStatus,
 } from "./session";
+import { visibleReminderText } from "./state";
 
 class FakeScheduler {
   callback: FrameRequestCallback | null = null;
@@ -60,14 +61,19 @@ function createHarness(
   projectWindow: (projection: unknown) => Promise<void> = async () => {},
 ) {
   const scheduler = new FakeScheduler();
+  const renderedTexts: string[] = [];
   const statuses: ReminderPresentationStatus[] = [];
+  let hovered = false;
   let handlers: ReminderDialogHandlers | null = null;
   const dialog: ReminderDialogController = {
     applyLayout: () => {},
     clear: () => {},
     destroy: () => {},
+    isHovered: () => hovered,
     measureHeight: () => 152,
-    render: () => {},
+    render: (item, _layerCount, time) => {
+      renderedTexts.push(item ? visibleReminderText(item, time) : "");
+    },
   };
   const session = createReminderPresentationSession(
     {
@@ -87,6 +93,13 @@ function createHarness(
   session.anchorChanged(environment());
   return {
     handlers: () => handlers,
+    hover(value: boolean, emitEvent = true): void {
+      hovered = value;
+      if (emitEvent) {
+        handlers?.onHoverChanged(value);
+      }
+    },
+    renderedTexts,
     scheduler,
     session,
     statuses,
@@ -94,6 +107,43 @@ function createHarness(
 }
 
 describe("reminder presentation session", () => {
+  it("continues revealing text while the pointer remains over the dialog", () => {
+    const { hover, renderedTexts, scheduler, session, statuses } = createHarness();
+    const text = "逐字显示不能停";
+    session.receive({ title: null, text, tone: "normal" });
+
+    scheduler.currentTime = 56;
+    hover(true);
+    expect(renderedTexts[renderedTexts.length - 1]).toBe("逐字显");
+
+    scheduler.fire(1000);
+    expect(renderedTexts[renderedTexts.length - 1]).toBe(text);
+    expect(statuses[statuses.length - 1]).toEqual({ active: true, tone: "normal" });
+
+    scheduler.fire(5000);
+    expect(statuses[statuses.length - 1]).toEqual({ active: true, tone: "normal" });
+
+    hover(false);
+    scheduler.fire(7999);
+    expect(statuses[statuses.length - 1]).toEqual({ active: true, tone: "normal" });
+    scheduler.fire(8000);
+    expect(statuses[statuses.length - 1]).toEqual({ active: false, tone: null });
+  });
+
+  it("recovers when pointerleave is lost but the dialog is no longer hovered", () => {
+    const { hover, renderedTexts, scheduler, session } = createHarness();
+    const text = "离开事件丢失也要恢复";
+    session.receive({ title: null, text, tone: "normal" });
+
+    scheduler.currentTime = 56;
+    hover(true);
+    hover(false, false);
+    scheduler.fire(1000);
+
+    expect(renderedTexts[renderedTexts.length - 1]).toBe(text);
+    expect(scheduler.callback).not.toBeNull();
+  });
+
   it("only resumes after every pause reason has cleared", () => {
     const { scheduler, session, statuses } = createHarness();
     session.receive({ title: null, text: "完成", tone: "normal" });
@@ -101,17 +151,17 @@ describe("reminder presentation session", () => {
     expect(scheduler.callback).not.toBeNull();
 
     scheduler.currentTime = 100;
-    session.pause("hover");
     session.pause("drag");
+    session.pause("screenshot");
     expect(scheduler.callback).toBeNull();
 
     scheduler.currentTime = 200;
-    session.resume("hover");
+    session.resume("drag");
     expect(scheduler.callback).toBeNull();
     expect(statuses[statuses.length - 1]?.active).toBe(true);
 
     scheduler.currentTime = 300;
-    session.resume("drag");
+    session.resume("screenshot");
     expect(scheduler.callback).not.toBeNull();
     expect(statuses[statuses.length - 1]?.active).toBe(true);
   });

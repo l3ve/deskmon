@@ -8,7 +8,7 @@
 - `src/pet/geometry.ts`: 桌宠前端坐标、插值、移动和矩形 clamp 工具。
 - `src/pet/reminderPresentation/session.ts`: 统一提醒呈现会话的唯一公开 Interface，负责完整生命周期和原生窗口投影。
 - `src/pet/reminderPresentation/state.ts`: 会话内部 FIFO、去重、20 条容量、4 层视觉和逐字计时 Implementation。
-- `src/pet/reminderPresentation/dialog.ts`: 会话内部 DOM Adapter，负责最终正文高度测量、呈现和交互事件。
+- `src/pet/reminderPresentation/dialog.ts`: 会话内部 DOM Adapter，负责最终正文高度测量、呈现、交互事件和实时悬停状态。
 - `src/pet/reminderPresentation/frame.ts`: 会话内部动态像素 SVG 外框、尖角和叠卡几何。
 - `src/pet/reminderPresentation/layout.ts`: 会话内部布局 Implementation，保持桌宠锚点并按右、左、下选择位置。
 - `src/settings.ts`: 设置窗口前端，负责桌宠、单次倒计时、截图、CLI 安装状态和活动区域配置。
@@ -111,8 +111,9 @@
 - 普通消息严格 FIFO，当前消息不被打断；队列最多 20 条，超限保留当前并淘汰最早待播，视觉最多 4 层。
 - 普通/成功消息 4 秒并使用常态尺寸 `celebrate`，错误 8 秒并保持 `idle`；所有正文使用逐字动画。
 - 统一提醒先用完整最终正文测量一次目标高度，再播放逐字动画；高度按 4px 像素栅格扩展且最小保持 152px，避免逐字过程抖动和多行截断。
-- 对话框按右、左、下选择位置并限制在显示器 work area；悬停、拖拽和截图会暂停或延迟展示。
-- 统一提醒暂停使用原因集合；悬停、拖拽和截图条件全部解除后才能恢复计时与逐字呈现。
+- 对话框按右、左、下选择位置并限制在显示器 work area；悬停先完整显示正文，再暂停自动结束。
+- 统一提醒的拖拽和截图属于硬暂停，会同时冻结正文呈现与自动结束；悬停只属于阅读暂停。
+- 对话框悬停不能只依赖 `pointerleave`；呈现帧要用实时 `:hover` 校准，避免窗口变化或遮罩导致暂停残留。
 - 统一提醒扩展与恢复常态窗口共用单条串行投影通道；过期中间布局合并，最终恢复不能被旧请求覆盖。
 - 对话框候选位置要先 clamp 到 work area，再按与宠物保持 14px 间距筛选；屏幕下沿允许左右对话框纵向上移，不能因原始矩形越界误退到下方。
 - 单次倒计时只保留未运行/运行中，默认 30 分钟、范围 1-180；自然结束提示，取消和退出保持安静。
@@ -140,6 +141,7 @@
 - macOS `screencapture` 拒绝以点号开头的临时目标文件；截图缓存使用非隐藏前缀，并兼容清理旧的隐藏缓存文件。
 - macOS 截图权限必须以 CoreGraphics 的系统预检结果为准，不能仅靠 `screencapture` 错误文字判断；区域或临时文件错误要显示真实原因。
 - macOS 打包使用通用 `Apple Development` 签名身份，保证 `com.sansan.deskmon` 的 TCC 身份在重复开发构建间稳定；未签名或 ad-hoc 构建会让系统设置显示旧授权但当前应用仍无权限。
+- 覆盖安装 `/Applications/Deskmon.app` 时直接替换旧版本，不创建 `Deskmon.app.codex-backup-*` 备份，避免长期留下冗余 App。
 - 截图覆盖层中的 `[hidden]` 需要专用 CSS 强制 `display: none`，避免工具栏的 `display: grid` 覆盖 HTML 隐藏属性。
 - 截图工具栏初始隐藏；有效选区完成后按下方优先、上方兜底定位，正常选区与工具栏之间保持 8px 间距。
 - MCP 试验优先作为开发期本地 stdio server，暴露 repo 状态、日志、PRD 和 QA 动作；不要把 AI 对话/长期记忆直接并入 V1 产品体验，涉及剪贴板或笔记本内容时默认只读或显式确认。

@@ -180,7 +180,7 @@ export function createReminderPresentationSession(
       disposed ||
       frameId !== null ||
       !state.presenting ||
-      pauseReasons.size > 0
+      hasHardPauseReason()
     ) {
       return;
     }
@@ -190,6 +190,24 @@ export function createReminderPresentationSession(
   function onFrame(time: number): void {
     frameId = null;
     if (disposed || !state.presenting) {
+      return;
+    }
+    reconcileHover();
+    if (hasHardPauseReason()) {
+      return;
+    }
+    const current = state.items[0];
+    const revealTime = state.pausedAt ?? time;
+    if (
+      current &&
+      pauseReasons.has("hover") &&
+      reminderRevealComplete(current, revealTime)
+    ) {
+      render(time);
+      if (state.pausedAt === null) {
+        state = pauseReminders(state, time);
+      }
+      scheduleFrame();
       return;
     }
     if (remindersExpired(state, time)) {
@@ -203,6 +221,19 @@ export function createReminderPresentationSession(
       render(time);
     }
     scheduleFrame();
+  }
+
+  function hasHardPauseReason(): boolean {
+    return pauseReasons.has("drag") || pauseReasons.has("screenshot");
+  }
+
+  function reconcileHover(): void {
+    const hovered = dialog.isHovered();
+    if (hovered && !pauseReasons.has("hover")) {
+      pause("hover");
+    } else if (!hovered && pauseReasons.has("hover")) {
+      resume("hover");
+    }
   }
 
   function render(time: number): void {
@@ -254,7 +285,7 @@ export function createReminderPresentationSession(
       disposed ||
       state.presenting ||
       state.items.length === 0 ||
-      pauseReasons.size > 0 ||
+      hasHardPauseReason() ||
       environment?.visible !== true
     ) {
       return;
@@ -265,6 +296,7 @@ export function createReminderPresentationSession(
 
   function finishPresentation(): void {
     cancelFrame();
+    pauseReasons.delete("hover");
     dialog.clear();
     layout = null;
     emitStatus();
@@ -280,23 +312,49 @@ export function createReminderPresentationSession(
     if (disposed || pauseReasons.has(reason)) {
       return;
     }
-    const wasUnpaused = pauseReasons.size === 0;
     pauseReasons.add(reason);
-    if (!wasUnpaused || !state.presenting) {
+    if (!state.presenting) {
       return;
     }
-    state = pauseReminders(state, scheduler.now());
-    cancelFrame();
-    render(scheduler.now());
+    const now = scheduler.now();
+    const current = state.items[0];
+    const shouldPauseNow =
+      reason !== "hover" ||
+      (current !== undefined && reminderRevealComplete(current, state.pausedAt ?? now));
+    if (shouldPauseNow && state.pausedAt === null) {
+      state = pauseReminders(state, now);
+    }
+    render(now);
+    if (reason === "hover") {
+      scheduleFrame();
+    } else {
+      cancelFrame();
+    }
   }
 
   function resume(reason: ReminderPauseReason): void {
-    if (disposed || !pauseReasons.delete(reason) || pauseReasons.size > 0) {
+    if (disposed || !pauseReasons.delete(reason)) {
       return;
     }
     if (state.presenting) {
-      state = resumeReminders(state, scheduler.now());
-      syncPresentation();
+      if (hasHardPauseReason()) {
+        return;
+      }
+      const now = scheduler.now();
+      const current = state.items[0];
+      const keepPausedForHover =
+        pauseReasons.has("hover") &&
+        current !== undefined &&
+        reminderRevealComplete(current, state.pausedAt ?? now);
+      if (state.pausedAt !== null && !keepPausedForHover) {
+        state = resumeReminders(state, now);
+      }
+      if (reason === "drag") {
+        syncPresentation();
+      } else {
+        render(now);
+        scheduleFrame();
+      }
       return;
     }
     startIfReady();
@@ -319,7 +377,7 @@ export function createReminderPresentationSession(
       finishPresentation();
       return;
     }
-    if (pauseReasons.size > 0) {
+    if (hasHardPauseReason()) {
       state = pauseReminders(state, now);
     }
     syncPresentation();

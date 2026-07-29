@@ -15,6 +15,7 @@ export interface ReminderDialogController {
   applyLayout(layout: ReminderLayout): void;
   clear(): void;
   destroy(): void;
+  isHovered(): boolean;
   measureHeight(item: ReminderItem, layerCount: number): number;
   render(item: ReminderItem | null, layerCount: number, time: number): void;
 }
@@ -143,6 +144,9 @@ export function createReminderDialog(
       root.removeEventListener("pointerup", handlePointerUp, true);
       root.removeEventListener("pointercancel", handlePointerCancel, true);
       element.remove();
+    },
+    isHovered(): boolean {
+      return element.matches(":hover");
     },
     measureHeight(item: ReminderItem, layerCount: number): number {
       updateMetadata(item, layerCount);
