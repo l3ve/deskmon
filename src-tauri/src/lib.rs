@@ -369,12 +369,10 @@ fn save_user_preferences(
 
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window(SETTINGS_WINDOW) {
-        window.show().map_err(|err| err.to_string())?;
-        window.set_focus().map_err(|err| err.to_string())?;
-        return Ok(());
+        return show_window_in_front(&window);
     }
 
-    WebviewWindowBuilder::new(
+    let window = WebviewWindowBuilder::new(
         &app,
         SETTINGS_WINDOW,
         WebviewUrl::App("index.html#settings".into()),
@@ -386,7 +384,7 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
     .resizable(true)
     .build()
     .map_err(|err| err.to_string())?;
-    Ok(())
+    show_window_in_front(&window)
 }
 
 fn open_remember_window(app: AppHandle) -> Result<(), String> {
