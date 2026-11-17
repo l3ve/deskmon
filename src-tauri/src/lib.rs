@@ -1,6 +1,8 @@
 mod countdown;
 mod external_notification;
 mod geometry;
+#[cfg(target_os = "macos")]
+mod memory_chain_paste;
 mod remember;
 mod screenshot;
 mod settings;
@@ -54,7 +56,6 @@ const PET_TIMER_STATUS_ID: &str = "pet_timer_status";
 const PET_NOTIFICATION_EVENT: &str = "deskmon-pet-notification";
 const POSITION_SAVE_INTERVAL_MS: u64 = 5000;
 const CLIPBOARD_POLL_INTERVAL_MS: u64 = 500;
-const VARIABLE_CLIPBOARD_CLEANUP_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +389,11 @@ fn open_settings_window(app: AppHandle) -> Result<(), String> {
 }
 
 fn open_remember_window(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        memory_chain_paste::remember_foreground_app();
+        memory_chain_paste::cancel(None);
+    }
     if let Some(window) = app.get_webview_window(REMEMBER_WINDOW) {
         ensure_remember_window_size(&window)?;
         return show_window_in_front(&window);
@@ -398,7 +404,7 @@ fn open_remember_window(app: AppHandle) -> Result<(), String> {
         REMEMBER_WINDOW,
         WebviewUrl::App("index.html#remember".into()),
     )
-    .title("记忆力")
+    .title("回忆")
     .inner_size(REMEMBER_WINDOW_WIDTH, REMEMBER_WINDOW_HEIGHT)
     .min_inner_size(REMEMBER_WINDOW_MIN_WIDTH, REMEMBER_WINDOW_MIN_HEIGHT)
     .center()
@@ -460,6 +466,8 @@ fn show_window_in_front(window: &WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn show_pet_menu(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    memory_chain_paste::remember_foreground_app();
     let menu = build_pet_menu(&app, &state)?;
     let window = app
         .get_webview_window(PET_WINDOW)
@@ -837,51 +845,12 @@ fn get_remember_snapshot(
 }
 
 #[tauri::command]
-fn open_remember(app: AppHandle) -> Result<(), String> {
-    open_remember_window(app)
-}
-
-#[tauri::command]
-fn remember_reset_clipboard(
+fn remember_copy_recent(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
-    source: String,
     id: String,
 ) -> Result<remember::RememberSnapshot, String> {
-    remember_reset_clipboard_inner(&app, &state, &source, &id)
-}
-
-#[tauri::command]
-fn remember_save_item(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    source: String,
-    id: String,
-) -> Result<remember::RememberSnapshot, String> {
-    let (text, truncated) = {
-        let remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state
-            .entry_text(&source, &id)
-            .ok_or("没有找到这条记忆")?
-    };
-
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.save_entry(&app, text, truncated)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    Ok(snapshot)
-}
-
-fn notify_remember(app: &AppHandle, body: &str, tone: PetNotificationTone) {
-    let _ = dispatch_pet_notification(app, Some("Deskmon".into()), body.into(), tone);
+    remember_copy_recent_inner(&app, &state, &id)
 }
 
 #[tauri::command]
@@ -891,241 +860,151 @@ fn remember_forget_recent(
     id: String,
 ) -> Result<remember::RememberSnapshot, String> {
     let snapshot = {
-        let mut remember_state = state
+        let mut remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember_state.forget_recent(&id);
-        remember::snapshot(&remember_state)
+        remember.forget_recent(&id);
+        remember::snapshot(&remember)
     };
     emit_remember_changed(&app, &snapshot);
     Ok(snapshot)
 }
 
 #[tauri::command]
-fn remember_clear_recent(
+fn remember_save_chain(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
+    id: Option<String>,
+    name: String,
+    note: Option<String>,
+    values: Vec<String>,
 ) -> Result<remember::RememberSnapshot, String> {
-    let snapshot = {
-        let mut remember_state = state
+    let (saved_id, snapshot) = {
+        let mut remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember_state.clear_recent();
-        remember::snapshot(&remember_state)
+        let saved_id = remember.save_chain(&app, id.as_deref(), name, note, values)?;
+        (saved_id, remember::snapshot(&remember))
     };
+    #[cfg(target_os = "macos")]
+    memory_chain_paste::cancel(Some(&saved_id));
     emit_remember_changed(&app, &snapshot);
     Ok(snapshot)
 }
 
 #[tauri::command]
-async fn remember_forget_notebook(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    id: String,
-) -> Result<remember::RememberSnapshot, String> {
-    let confirmed = confirm_dialog(
-        app.clone(),
-        "记忆力",
-        "要让 Deskmon 忘记这条笔记本内容吗？",
-        "忘记",
-    )
-    .await?;
-
-    if !confirmed {
-        let snapshot = get_remember_snapshot(state)?;
-        restore_remember_window_focus(&app);
-        return Ok(snapshot);
-    }
-
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.forget_notebook(&app, &id)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    restore_remember_window_focus(&app);
-    Ok(snapshot)
-}
-
-#[tauri::command]
-fn remember_set_notebook_pinned(
+fn remember_set_chain_pinned(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
     pinned: bool,
 ) -> Result<remember::RememberSnapshot, String> {
     let snapshot = {
-        let mut remember_state = state
+        let mut remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember_state.set_notebook_pinned(&app, &id, pinned)?;
-        remember::snapshot(&remember_state)
+        remember.set_chain_pinned(&app, &id, pinned)?;
+        remember::snapshot(&remember)
     };
     emit_remember_changed(&app, &snapshot);
     Ok(snapshot)
 }
 
 #[tauri::command]
-async fn remember_reset_notebook(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<remember::RememberSnapshot, String> {
-    let confirmed = confirm_dialog(
-        app.clone(),
-        "重置记忆力",
-        "笔记本和变量都会被清空，这些内容无法恢复。",
-        "重置",
-    )
-    .await?;
-
-    if !confirmed {
-        let snapshot = get_remember_snapshot(state)?;
-        restore_remember_window_focus(&app);
-        return Ok(snapshot);
-    }
-
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.reset_notebook(&app)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    restore_remember_window_focus(&app);
-    Ok(snapshot)
-}
-
-#[tauri::command]
-fn remember_create_variable(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    key: String,
-    value: String,
-    note: Option<String>,
-) -> Result<remember::RememberSnapshot, String> {
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.create_variable(&app, key, value, note)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    update_tray_menu(&app)?;
-    Ok(snapshot)
-}
-
-#[tauri::command]
-fn remember_update_variable(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    id: String,
-    key: String,
-    value: String,
-    note: Option<String>,
-) -> Result<remember::RememberSnapshot, String> {
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.update_variable(&app, &id, key, value, note)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    update_tray_menu(&app)?;
-    Ok(snapshot)
-}
-
-#[tauri::command]
-async fn remember_delete_variable(
+async fn remember_delete_chain(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<remember::RememberSnapshot, String> {
-    let key = {
-        let remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.variable_key(&id).ok_or("没有找到这个变量")?
-    };
+    let name = state
+        .remember
+        .lock()
+        .map_err(|_| "remember lock poisoned")?
+        .chain_name(&id)?
+        .to_owned();
     let confirmed = confirm_dialog(
         app.clone(),
-        "删除变量",
-        format!("要让 Deskmon 忘记变量“{key}”吗？"),
+        "删除记忆链",
+        format!("要删除“{name}”吗？"),
         "删除",
     )
     .await?;
-
+    restore_remember_window_focus(&app);
     if !confirmed {
-        let snapshot = get_remember_snapshot(state)?;
-        restore_remember_window_focus(&app);
-        return Ok(snapshot);
+        return get_remember_snapshot(state);
     }
 
     let snapshot = {
-        let mut remember_state = state
+        let mut remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember_state.delete_variable(&app, &id)?;
-        remember::snapshot(&remember_state)
+        remember.delete_chain(&app, &id)?;
+        remember::snapshot(&remember)
     };
+    #[cfg(target_os = "macos")]
+    let _ = app.run_on_main_thread(move || memory_chain_paste::cancel(Some(&id)));
     emit_remember_changed(&app, &snapshot);
-    update_tray_menu(&app)?;
-    restore_remember_window_focus(&app);
     Ok(snapshot)
 }
 
 #[tauri::command]
-fn remember_copy_variable(
+async fn remember_reset_chains(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
-    id: String,
 ) -> Result<remember::RememberSnapshot, String> {
-    remember_copy_variable_inner(&app, &state, &id)
+    let confirmed =
+        confirm_dialog(app.clone(), "重置记忆链", "所有记忆链都会被清空。", "重置").await?;
+    restore_remember_window_focus(&app);
+    if !confirmed {
+        return get_remember_snapshot(state);
+    }
+    let snapshot = {
+        let mut remember = state
+            .remember
+            .lock()
+            .map_err(|_| "remember lock poisoned")?;
+        remember.reset_chains(&app)?;
+        remember::snapshot(&remember)
+    };
+    #[cfg(target_os = "macos")]
+    let _ = app.run_on_main_thread(|| memory_chain_paste::cancel(None));
+    emit_remember_changed(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
-fn remember_reveal_variable_value(
+fn remember_use_chain(
+    app: AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
-) -> Result<String, String> {
-    let remember_state = state
+) -> Result<(), String> {
+    remember_use_chain_inner(&app, &state, id)?;
+    if let Some(window) = app.get_webview_window(REMEMBER_WINDOW) {
+        if let Err(error) = window.hide() {
+            #[cfg(target_os = "macos")]
+            memory_chain_paste::cancel(None);
+            return Err(error.to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    memory_chain_paste::restore_foreground_app();
+    Ok(())
+}
+
+#[tauri::command]
+fn remember_chain_values(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Vec<String>, String> {
+    state
         .remember
         .lock()
-        .map_err(|_| "remember lock poisoned")?;
-    remember_state
-        .variable_value(&id)
-        .ok_or("没有找到这个变量".into())
-}
-
-#[tauri::command]
-fn remember_set_variable_clipboard_cleanup_enabled(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-    enabled: bool,
-) -> Result<remember::RememberSnapshot, String> {
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.set_variable_clipboard_cleanup_enabled(&app, enabled)?;
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(&app, &snapshot);
-    Ok(snapshot)
+        .map_err(|_| "remember lock poisoned")?
+        .chain_values(&id)
 }
 
 async fn confirm_dialog(
@@ -1372,181 +1251,148 @@ fn spawn_countdown_worker(app: AppHandle, countdown_id: u64) {
 }
 
 fn spawn_clipboard_worker(app: AppHandle) {
-    thread::spawn(move || {
-        let mut clipboard = loop {
-            match arboard::Clipboard::new() {
-                Ok(clipboard) => break clipboard,
-                Err(_) => thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS)),
-            }
-        };
-
-        let baseline = clipboard
-            .get_text()
-            .ok()
-            .and_then(|text| remember::normalize_text(&text).map(|(text, _)| text));
-        if let Some(state) = app.try_state::<AppState>() {
-            if let Ok(mut remember_state) = state.remember.lock() {
-                remember_state.clipboard_initialized = true;
-                remember_state.last_clipboard_text = baseline;
-            }
-        }
-
-        loop {
+    #[cfg(target_os = "macos")]
+    {
+        poll_remember_clipboard(&app);
+        thread::spawn(move || loop {
             thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
-            let text = match clipboard.get_text() {
-                Ok(text) => text,
-                Err(_) => continue,
-            };
-            let Some((text, truncated)) = remember::normalize_text(&text) else {
-                continue;
-            };
+            let poll_app = app.clone();
+            if app
+                .run_on_main_thread(move || poll_remember_clipboard(&poll_app))
+                .is_err()
+            {
+                break;
+            }
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    thread::spawn(move || {
+        let Ok(mut clipboard) = arboard::Clipboard::new() else {
+            return;
+        };
+        let mut initialized = false;
+        loop {
             let Some(state) = app.try_state::<AppState>() else {
                 break;
             };
-            let changed = {
-                let mut remember_state = match state.remember.lock() {
-                    Ok(remember_state) => remember_state,
-                    Err(_) => break,
+            let text = clipboard.get_text().ok();
+            let snapshot = {
+                let Ok(mut remember) = state.remember.lock() else {
+                    break;
                 };
-                if !remember_state.clipboard_initialized {
-                    remember_state.clipboard_initialized = true;
-                    remember_state.last_clipboard_text = Some(text);
-                    false
-                } else if remember_state.last_clipboard_text.as_deref() == Some(text.as_str()) {
-                    false
-                } else {
-                    remember_state.last_clipboard_text = Some(text.clone());
-                    remember_state.push_recent(text, truncated);
-                    true
-                }
+                observe_remember_clipboard(&mut remember, text, initialized)
             };
-
-            if changed {
-                let _ = emit_current_remember_changed(&app);
+            if let Some(snapshot) = snapshot {
+                emit_remember_changed(&app, &snapshot);
             }
-        }
-    });
-}
-
-fn remember_reset_clipboard_inner(
-    app: &AppHandle,
-    state: &tauri::State<'_, AppState>,
-    source: &str,
-    id: &str,
-) -> Result<remember::RememberSnapshot, String> {
-    let (text, truncated) = {
-        let remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state
-            .entry_text(source, id)
-            .ok_or("没有找到这条记忆")?
-    };
-
-    set_clipboard_text(&text)?;
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.clipboard_initialized = true;
-        remember_state.last_clipboard_text = Some(text.clone());
-        remember_state.push_recent(text, truncated);
-        remember::snapshot(&remember_state)
-    };
-    emit_remember_changed(app, &snapshot);
-    Ok(snapshot)
-}
-
-fn remember_copy_variable_inner(
-    app: &AppHandle,
-    state: &tauri::State<'_, AppState>,
-    id: &str,
-) -> Result<remember::RememberSnapshot, String> {
-    let (key, value, cleanup_enabled) = {
-        let remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        let key = remember_state.variable_key(id).ok_or("没有找到这个变量")?;
-        let value = remember_state
-            .variable_value(id)
-            .ok_or("没有找到这个变量")?;
-        (
-            key,
-            value,
-            remember_state.variable_clipboard_cleanup_enabled,
-        )
-    };
-
-    let snapshot = {
-        let mut remember_state = state
-            .remember
-            .lock()
-            .map_err(|_| "remember lock poisoned")?;
-        remember_state.clipboard_initialized = true;
-        remember_state.last_clipboard_text = Some(value.clone());
-        remember::snapshot(&remember_state)
-    };
-    set_clipboard_text(&value)?;
-    emit_remember_changed(app, &snapshot);
-    if cleanup_enabled {
-        spawn_variable_clipboard_cleanup(app.clone(), value);
-    }
-    notify_remember(
-        app,
-        &format!("已复制变量“{key}”"),
-        PetNotificationTone::Normal,
-    );
-    Ok(snapshot)
-}
-
-fn spawn_variable_clipboard_cleanup(app: AppHandle, value: String) {
-    thread::spawn(move || {
-        let mut clipboard = match arboard::Clipboard::new() {
-            Ok(clipboard) => clipboard,
-            Err(_) => return,
-        };
-        for _ in 0..(VARIABLE_CLIPBOARD_CLEANUP_SECONDS * 1000 / CLIPBOARD_POLL_INTERVAL_MS) {
+            initialized = true;
             thread::sleep(Duration::from_millis(CLIPBOARD_POLL_INTERVAL_MS));
-            match clipboard.get_text() {
-                Ok(current) if current == value => {}
-                _ => return,
-            }
-        }
-        if matches!(clipboard.get_text(), Ok(current) if current == value) {
-            let _ = clipboard.set_text(String::new());
-            if let Some(state) = app.try_state::<AppState>() {
-                if let Ok(mut remember_state) = state.remember.lock() {
-                    remember_state.clipboard_initialized = true;
-                    remember_state.last_clipboard_text = None;
-                }
-            }
         }
     });
 }
 
-fn set_clipboard_text(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .map_err(|err| err.to_string())?
-        .set_text(text.to_owned())
-        .map_err(|err| err.to_string())
-}
+#[cfg(target_os = "macos")]
+fn poll_remember_clipboard(app: &AppHandle) {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
 
-fn emit_current_remember_changed(app: &AppHandle) -> Result<(), String> {
+    let board = NSPasteboard::generalPasteboard();
+    if memory_chain_paste::poll_clipboard(&board) {
+        return;
+    }
     let Some(state) = app.try_state::<AppState>() else {
-        return Ok(());
+        return;
     };
     let snapshot = {
-        let remember_state = state
+        let Ok(mut remember) = state.remember.lock() else {
+            return;
+        };
+        let revision = board.changeCount();
+        if remember.clipboard_revision == Some(revision) {
+            return;
+        }
+        let text = board
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|text| text.to_string());
+        if board.changeCount() != revision {
+            return;
+        }
+        let initialized = remember.clipboard_revision.replace(revision).is_some();
+        observe_remember_clipboard(&mut remember, text, initialized)
+    };
+    if let Some(snapshot) = snapshot {
+        emit_remember_changed(app, &snapshot);
+    }
+}
+
+fn observe_remember_clipboard(
+    remember: &mut remember::RememberState,
+    text: Option<String>,
+    initialized: bool,
+) -> Option<remember::RememberSnapshot> {
+    let Some((text, truncated)) = text.as_deref().and_then(remember::normalize_text) else {
+        remember.last_clipboard_text = None;
+        return None;
+    };
+    if remember.last_clipboard_text.as_deref() == Some(text.as_str()) {
+        return None;
+    }
+    remember.last_clipboard_text = Some(text.clone());
+    if !initialized {
+        return None;
+    }
+    remember.push_recent(text, truncated);
+    Some(remember::snapshot(remember))
+}
+
+fn remember_copy_recent_inner(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    id: &str,
+) -> Result<remember::RememberSnapshot, String> {
+    #[cfg(target_os = "macos")]
+    memory_chain_paste::cancel(None);
+    let snapshot = {
+        let mut remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember::snapshot(&remember_state)
+        let entry = remember
+            .recent
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("没有找到这条记忆")?;
+        let (text, truncated) = (entry.text.clone(), entry.truncated);
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.set_text(text.clone()))
+            .map_err(|error| error.to_string())?;
+        remember.last_clipboard_text = Some(text.clone());
+        remember.push_recent(text, truncated);
+        remember::snapshot(&remember)
     };
     emit_remember_changed(app, &snapshot);
-    Ok(())
+    Ok(snapshot)
+}
+
+fn remember_use_chain_inner(
+    app: &AppHandle,
+    state: &tauri::State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let values = state
+        .remember
+        .lock()
+        .map_err(|_| "remember lock poisoned")?
+        .chain_values(&id)?;
+    #[cfg(target_os = "macos")]
+    {
+        memory_chain_paste::start(app.clone(), id, values)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, id, values);
+        Err("此平台暂不支持顺序粘贴".into())
+    }
 }
 
 fn emit_remember_changed(app: &AppHandle, snapshot: &remember::RememberSnapshot) {
@@ -1671,7 +1517,7 @@ fn build_tray_menu(
         .separator()
         .text("region_screenshot", "区域截图")
         .separator()
-        .text("open_remember", "记忆力")
+        .text("open_remember", "回忆")
         .separator()
         .text("open_settings", "设置")
         .text("quit", "退出");
@@ -1733,78 +1579,32 @@ fn build_remember_reset_submenu(
     state: &tauri::State<'_, AppState>,
 ) -> Result<Submenu<tauri::Wry>, String> {
     let snapshot = {
-        let remember_state = state
+        let remember = state
             .remember
             .lock()
             .map_err(|_| "remember lock poisoned")?;
-        remember::snapshot(&remember_state)
+        remember::snapshot(&remember)
     };
-    let recent =
-        build_remember_entries_submenu(app, "记忆中", "remember_recent_", &snapshot.recent)?;
-    let notebook =
-        build_remember_entries_submenu(app, "笔记本", "remember_notebook_", &snapshot.notebook)?;
-    let variables =
-        build_remember_variable_submenu(app, "变量", "remember_variable_", &snapshot.variables)?;
-    SubmenuBuilder::new(app, "回忆")
-        .item(&recent)
-        .item(&notebook)
-        .item(&variables)
+    let mut builder = SubmenuBuilder::new(app, "回忆");
+    for chain in snapshot.chains {
+        let pinned = if chain.pinned { "↑ " } else { "" };
+        builder = builder.text(
+            format!("remember_chain_{}", chain.id),
+            format!("{pinned}{}", chain.name),
+        );
+    }
+    if !snapshot.recent.is_empty() {
+        let mut recent = SubmenuBuilder::new(app, "记忆中");
+        for entry in snapshot.recent {
+            recent = recent.text(format!("remember_recent_{}", entry.id), entry.preview);
+        }
+        let recent = recent.build().map_err(|error| error.to_string())?;
+        builder = builder.separator().item(&recent);
+    }
+    builder
+        .text("open_remember", "打开回忆…")
         .build()
-        .map_err(|err| err.to_string())
-}
-
-fn build_remember_entries_submenu(
-    app: &AppHandle,
-    label: &str,
-    id_prefix: &str,
-    entries: &[remember::RememberItemPayload],
-) -> Result<Submenu<tauri::Wry>, String> {
-    let mut builder = SubmenuBuilder::new(app, label);
-    if entries.is_empty() {
-        let item = MenuItem::with_id(
-            app,
-            format!("{id_prefix}empty"),
-            "还没有",
-            false,
-            None::<&str>,
-        )
-        .map_err(|err| err.to_string())?;
-        builder = builder.item(&item);
-    } else {
-        for entry in entries {
-            let pinned_mark = if entry.pinned { "↑ " } else { "" };
-            builder = builder.text(
-                format!("{id_prefix}{}", entry.id),
-                format!("{pinned_mark}{}", entry.preview),
-            );
-        }
-    }
-    builder.build().map_err(|err| err.to_string())
-}
-
-fn build_remember_variable_submenu(
-    app: &AppHandle,
-    label: &str,
-    id_prefix: &str,
-    entries: &[remember::RememberVariablePayload],
-) -> Result<Submenu<tauri::Wry>, String> {
-    let mut builder = SubmenuBuilder::new(app, label);
-    if entries.is_empty() {
-        let item = MenuItem::with_id(
-            app,
-            format!("{id_prefix}empty"),
-            "还没有",
-            false,
-            None::<&str>,
-        )
-        .map_err(|err| err.to_string())?;
-        builder = builder.item(&item);
-    } else {
-        for entry in entries {
-            builder = builder.text(format!("{id_prefix}{}", entry.id), entry.key.clone());
-        }
-    }
-    builder.build().map_err(|err| err.to_string())
+        .map_err(|error| error.to_string())
 }
 
 fn timer_status_label(countdown: &CountdownSnapshot) -> String {
@@ -1871,20 +1671,17 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         return;
     };
     if let Some(id) = event_id.strip_prefix("remember_recent_") {
-        if id != "empty" {
-            let _ = remember_reset_clipboard_inner(app, &state, "recent", id);
-        }
+        let _ = remember_copy_recent_inner(app, &state, id);
         return;
     }
-    if let Some(id) = event_id.strip_prefix("remember_notebook_") {
-        if id != "empty" {
-            let _ = remember_reset_clipboard_inner(app, &state, "notebook", id);
-        }
-        return;
-    }
-    if let Some(id) = event_id.strip_prefix("remember_variable_") {
-        if id != "empty" {
-            let _ = remember_copy_variable_inner(app, &state, id);
+    if let Some(id) = event_id.strip_prefix("remember_chain_") {
+        if let Err(error) = remember_use_chain(app.clone(), state, id.to_owned()) {
+            let _ = dispatch_pet_notification(
+                app,
+                Some("记忆链".into()),
+                error,
+                PetNotificationTone::Error,
+            );
         }
         return;
     }
@@ -1928,6 +1725,8 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
             start_region_screenshot(app, &state);
         }
         "quit" => {
+            #[cfg(target_os = "macos")]
+            memory_chain_paste::cancel(None);
             app.exit(0);
         }
         "start_countdown" => {
@@ -2137,20 +1936,14 @@ pub fn run() {
             cancel_screenshot_task,
             show_pet_menu,
             get_remember_snapshot,
-            open_remember,
-            remember_reset_clipboard,
-            remember_save_item,
+            remember_copy_recent,
             remember_forget_recent,
-            remember_clear_recent,
-            remember_forget_notebook,
-            remember_set_notebook_pinned,
-            remember_reset_notebook,
-            remember_create_variable,
-            remember_update_variable,
-            remember_delete_variable,
-            remember_copy_variable,
-            remember_reveal_variable_value,
-            remember_set_variable_clipboard_cleanup_enabled
+            remember_save_chain,
+            remember_set_chain_pinned,
+            remember_delete_chain,
+            remember_reset_chains,
+            remember_use_chain,
+            remember_chain_values
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

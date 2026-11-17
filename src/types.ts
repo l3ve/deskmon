@@ -77,31 +77,25 @@ export interface WindowFramePayload {
   cursor: Point;
 }
 
-export type RememberSource = "recent" | "notebook";
-
 export interface RememberItem {
   id: string;
   text: string;
   preview: string;
-  pinned: boolean;
   truncated: boolean;
 }
 
-export interface RememberVariableItem {
+export interface MemoryChainSummary {
   id: string;
-  key: string;
+  name: string;
   note: string | null;
+  valueCount: number;
+  pinned: boolean;
 }
 
 export interface RememberSnapshot {
   recent: RememberItem[];
-  notebook: RememberItem[];
-  variables: RememberVariableItem[];
+  chains: MemoryChainSummary[];
   error: string | null;
   recentLimit: number;
-  notebookLimit: number;
-  variableLimit: number;
-  variableClipboardCleanupEnabled: boolean;
-  textLimit: number;
-  previewChars: number;
+  chainLimit: number;
 }

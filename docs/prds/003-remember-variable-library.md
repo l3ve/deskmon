@@ -1,11 +1,11 @@
 # PRD：Deskmon 记忆力变量库
 
-状态：已实现
+状态：历史方案
 目标 triage 标签：ready-for-agent
 创建日期：2026-07-06
 最后更新：2026-07-24
 发布状态：已发布到 GitHub issue #3：https://github.com/l3ve/deskmon/issues/3
-当前关系：变量隐私、搜索和剪贴板自动清理规则继续有效；可见宠物时的结果反馈由 PRD 011 统一。
+当前关系：旧变量库已由[PRD 012 记忆链](012-memory-chain.md)替换。
 
 ## 问题陈述
 
