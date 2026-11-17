@@ -1071,7 +1071,7 @@ button {
   color: #87958e;
 }
 
-.remember-add-variable {
+.remember-add-chain {
   height: 42px;
 }
 
@@ -1103,12 +1103,8 @@ button {
   flex-grow: 0.9;
 }
 
-.remember-section.notebook {
-  flex-grow: 1.1;
-}
-
-.remember-section.variable {
-  flex-grow: 0.86;
+.remember-section.chains {
+  flex-grow: 1.25;
 }
 
 .remember-section.empty {
@@ -1244,12 +1240,8 @@ button {
   background: #49a875;
 }
 
-.remember-row-source.notebook {
-  background: #416f9c;
-}
-
-.remember-row-source.variable {
-  background: #8163a8;
+.remember-row-source.chain {
+  background: #a987b9;
 }
 
 .remember-row-copy {
@@ -1294,7 +1286,7 @@ button {
   white-space: nowrap;
 }
 
-.remember-row.variable .remember-row-chip,
+.remember-row.chain .remember-row-chip,
 .remember-badge.private {
   color: #5c4780;
   background: #eee8f6;
@@ -1373,12 +1365,7 @@ button {
   overflow: hidden;
 }
 
-.remember-detail-content.variable {
-  grid-template-rows: 64px auto auto minmax(0, 1fr);
-  align-content: start;
-}
-
-.remember-detail-content.empty {
+.remember-detail-content.recent-detail {
   grid-template-rows: 56px minmax(0, 1fr);
 }
 
@@ -1526,12 +1513,52 @@ button {
   font-weight: 600;
 }
 
-.remember-variable-form {
+.remember-chain-form {
   display: grid;
   gap: 14px;
   min-height: 0;
   padding: 16px;
   overflow: auto;
+}
+
+.remember-chain-form h2,
+.remember-chain-form h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.remember-chain-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.remember-chain-controls label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.remember-chain-values {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remember-chain-value {
+  display: grid;
+  gap: 6px;
+}
+
+.remember-chain-value .remember-chain-controls {
+  justify-content: flex-end;
+}
+
+.remember-chain-form:not(.show-values) textarea {
+  -webkit-text-security: disc;
 }
 
 .remember-form-field {
@@ -1832,7 +1859,7 @@ button {
     background: #254434;
   }
 
-  .remember-row.variable .remember-row-chip,
+  .remember-row.chain .remember-row-chip,
   .remember-badge.private {
     color: #e2d5ff;
     background: #392f49;
