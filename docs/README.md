@@ -12,6 +12,13 @@ PRD 是需求形成时的决策记录。后续 PRD 可以覆盖旧方案，因�
 
 `designs/` 保存“记忆力”窗口和变量库的设计稿、流程图及说明。
 
+全局浅色视觉重设计：
+
+- [视觉规则](designs/deskmon-visual-redesign.md)
+- [视觉系统设计板](designs/deskmon-visual-system.svg)
+- [设置与记忆力窗口设计板](designs/deskmon-workspace-windows.svg)
+- [宠物提醒与截图界面设计板](designs/deskmon-floating-surfaces.svg)
+
 设计稿用于解释信息架构和视觉方向。若设计稿与当前代码不同，以已实现代码、最新 PRD 和 README 为准。
 
 ## 验收清单
