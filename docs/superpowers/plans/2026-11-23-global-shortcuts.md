@@ -1,5 +1,7 @@
 # 截图与记忆链统一全局快捷键 Implementation Plan
 
+**Issue:** [#25 · 截图全局快捷键设置与记忆链 Tauri 热键迁移](https://github.com/l3ve/deskmon/issues/25)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 通过 Tauri 插件提供默认未绑定的截图全局快捷键，并迁移记忆链 `⌘V`。
