@@ -29,9 +29,14 @@ rand = "0.8"
 chrono = "0.4"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2.4.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.25", features = ["elcapitan"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSPasteboard", "NSRunningApplication", "NSWorkspace", "libc"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSString"] }
+
+[patch.crates-io]
+# Backport upstream's macOS exclusive registration fix; see vendor README.deskmon.md.
+global-hotkey = { path = "vendor/global-hotkey" }

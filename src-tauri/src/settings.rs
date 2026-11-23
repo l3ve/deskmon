@@ -1,6 +1,6 @@
 use crate::geometry::{Dimensions, Point, Rect};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, io::Write, path::PathBuf};
 use tauri::{AppHandle, Manager};
 
 const SETTINGS_FILE: &str = "settings.json";
@@ -70,6 +70,8 @@ struct LegacyFocusTimerPreferences {
 pub(crate) struct ScreenshotPreferences {
     #[serde(default)]
     pub(crate) save_directory: Option<String>,
+    #[serde(default)]
+    pub(crate) shortcut: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,15 +109,90 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UserPreferences {
-    pub(crate) pet_size: PetSize,
-    pub(crate) activity_level: ActivityLevel,
-    pub(crate) always_on_top: bool,
-    pub(crate) countdown: CountdownPreferences,
-    pub(crate) screenshot: ScreenshotPreferences,
-    pub(crate) custom_activity_area: Option<Rect>,
+pub(crate) struct UserPreferencesPatch {
+    pub(crate) pet_size: Option<PetSize>,
+    pub(crate) activity_level: Option<ActivityLevel>,
+    pub(crate) always_on_top: Option<bool>,
+    pub(crate) countdown: Option<CountdownPreferences>,
+    pub(crate) screenshot: Option<ScreenshotPreferencesPatch>,
+    #[serde(default, deserialize_with = "nullable_patch")]
+    pub(crate) custom_activity_area: Option<Option<Rect>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScreenshotPreferencesPatch {
+    #[serde(default, deserialize_with = "nullable_patch")]
+    pub(crate) save_directory: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable_patch")]
+    pub(crate) shortcut: Option<Option<String>>,
+}
+
+fn nullable_patch<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<T>>, D::Error> {
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+pub(crate) fn apply_preferences_patch(
+    current: &Settings,
+    patch: UserPreferencesPatch,
+) -> Result<Settings, String> {
+    let mut updated = current.clone();
+    if let Some(value) = patch.pet_size {
+        updated.pet_size = value;
+    }
+    if let Some(value) = patch.activity_level {
+        updated.activity_level = value;
+    }
+    if let Some(value) = patch.always_on_top {
+        updated.always_on_top = value;
+    }
+    if let Some(value) = patch.countdown {
+        updated.countdown = normalize_countdown_preferences(value)?;
+    }
+    if let Some(value) = patch.custom_activity_area {
+        updated.custom_activity_area = value;
+    }
+    if let Some(screenshot) = patch.screenshot {
+        if let Some(value) = screenshot.save_directory {
+            updated.screenshot.save_directory = value;
+        }
+        if let Some(value) = screenshot.shortcut {
+            updated.screenshot.shortcut = value;
+        }
+        updated.screenshot = normalize_screenshot_preferences(updated.screenshot);
+    }
+    Ok(updated)
+}
+
+fn replace_settings_file(
+    path: &std::path::Path,
+    write: impl FnOnce(&mut fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    let temporary = path.with_extension(format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 pub(crate) fn load_settings(app: &AppHandle) -> Settings {
@@ -142,13 +219,15 @@ pub(crate) fn normalize_screenshot_preferences(
             .save_directory
             .map(|path| path.trim().to_string())
             .filter(|path| !path.is_empty()),
+        shortcut: preferences.shortcut,
     }
 }
 
 pub(crate) fn save_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
     let path = settings_path(app)?;
     let json = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
-    fs::write(path, json).map_err(|err| err.to_string())
+    replace_settings_file(&path, |file| file.write_all(json.as_bytes()))
+        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn normalize_countdown_preferences(
@@ -195,10 +274,78 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn partial_screenshot_saves_merge_against_latest_settings_and_null_clears() {
+        let mut current = Settings::default();
+        current.screenshot = ScreenshotPreferences {
+            save_directory: Some("/tmp/repaired".into()),
+            shortcut: Some("Super+KeyA".into()),
+        };
+        let patch =
+            serde_json::from_value(serde_json::json!({"screenshot": {"shortcut": "Alt+F2"}}))
+                .unwrap();
+        let changed = apply_preferences_patch(&current, patch).unwrap();
+        assert_eq!(
+            changed.screenshot.save_directory.as_deref(),
+            Some("/tmp/repaired")
+        );
+        assert_eq!(changed.screenshot.shortcut.as_deref(), Some("Alt+F2"));
+        let patch =
+            serde_json::from_value(serde_json::json!({"screenshot": {"saveDirectory": null}}))
+                .unwrap();
+        let cleared = apply_preferences_patch(&changed, patch).unwrap();
+        assert_eq!(cleared.screenshot.save_directory, None);
+        assert_eq!(cleared.screenshot.shortcut.as_deref(), Some("Alt+F2"));
+    }
+
+    #[test]
+    fn interrupted_settings_write_preserves_previous_file() {
+        let directory = std::env::temp_dir().join(format!(
+            "deskmon-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("settings.json");
+        fs::write(&path, "previous settings").unwrap();
+        assert!(replace_settings_file(&path, |file| {
+            file.write_all(b"partial")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "previous settings");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn countdown_defaults_to_thirty_minutes() {
         assert_eq!(CountdownPreferences::default().minutes, 30);
+    }
+
+    #[test]
+    fn screenshot_legacy_directory_has_no_shortcut_and_new_binding_round_trips() {
+        let legacy: ScreenshotPreferences = serde_json::from_value(serde_json::json!({
+            "saveDirectory": "/tmp/captures"
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap()["shortcut"],
+            serde_json::Value::Null
+        );
+        let configured: ScreenshotPreferences = serde_json::from_value(serde_json::json!({
+            "saveDirectory": "/tmp/captures", "shortcut": "Super+Shift+KeyA"
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(normalize_screenshot_preferences(configured)).unwrap(),
+            serde_json::json!({"saveDirectory": "/tmp/captures", "shortcut": "Super+Shift+KeyA"})
+        );
     }
 
     #[test]
@@ -207,6 +354,7 @@ mod tests {
         assert_eq!(
             normalize_screenshot_preferences(ScreenshotPreferences {
                 save_directory: Some("   ".into()),
+                ..Default::default()
             })
             .save_directory,
             None
@@ -214,6 +362,7 @@ mod tests {
         assert_eq!(
             normalize_screenshot_preferences(ScreenshotPreferences {
                 save_directory: Some(" /tmp/captures ".into()),
+                ..Default::default()
             })
             .save_directory
             .as_deref(),
