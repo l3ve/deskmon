@@ -2,7 +2,7 @@
 
 跟踪 Issue：[截图全局快捷键设置与记忆链 Tauri 热键迁移 #25](https://github.com/l3ve/deskmon/issues/25)
 
-状态：本地已实现并安装，原生全流程验收与合并待完成；验收清单以 Issue #25 跟踪。
+状态：已实现、安装并推送 `codex/global-shortcuts`，Issue #25 已按用户要求关闭；尚未合并，未完成的原生全流程验收仍保留在 Issue 清单中。
 
 ## 意图与范围
 
