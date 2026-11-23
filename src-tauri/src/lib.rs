@@ -1,6 +1,7 @@
 mod countdown;
 mod external_notification;
 mod geometry;
+mod global_shortcuts;
 #[cfg(target_os = "macos")]
 mod memory_chain_paste;
 mod remember;
@@ -17,10 +18,10 @@ use geometry::{
     Point, Rect,
 };
 use screenshot::ScreenshotCoordinator;
+use global_shortcuts::ScreenshotShortcutStatus;
 use serde::{Deserialize, Serialize};
 use settings::{
-    load_settings, normalize_countdown_preferences, normalize_screenshot_preferences,
-    save_settings, ScreenshotPreferences, Settings, UserPreferences,
+    apply_preferences_patch, load_settings, save_settings, Settings, UserPreferencesPatch,
 };
 use std::{
     path::{Path, PathBuf},
@@ -69,6 +70,7 @@ struct BootstrapPayload {
     pet_position: Point,
     countdown: CountdownSnapshot,
     screenshot_directory: String,
+    screenshot_shortcut_status: ScreenshotShortcutStatus,
     cli_installation_state: CliInstallationState,
 }
 
@@ -98,6 +100,14 @@ struct ScreenshotEditingPayload {
 #[serde(rename_all = "camelCase")]
 struct ScreenshotSavePayload {
     filename: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreferencesSavePayload {
+    settings: Settings,
+    screenshot_directory: String,
+    screenshot_shortcut_status: ScreenshotShortcutStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +162,10 @@ fn get_bootstrap(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<BootstrapPayload, String> {
+    bootstrap_snapshot(app, state, true)
+}
+
+fn bootstrap_snapshot(app: AppHandle, state: tauri::State<'_, AppState>, persist: bool) -> Result<BootstrapPayload, String> {
     let mut settings = state
         .settings
         .lock()
@@ -178,7 +192,7 @@ fn get_bootstrap(
 
     let countdown = countdown_snapshot(&state);
     resize_and_place_pet_window(&app, position, pet_dimensions)?;
-    save_settings(&app, &settings_snapshot)?;
+    if persist { save_settings(&app, &settings_snapshot)?; }
 
     Ok(BootstrapPayload {
         settings: settings_snapshot,
@@ -190,6 +204,7 @@ fn get_bootstrap(
         pet_position: position,
         countdown,
         screenshot_directory: screenshot_directory.to_string_lossy().into_owned(),
+        screenshot_shortcut_status: global_shortcuts::screenshot_shortcut_status(&app),
         cli_installation_state: external_notification::cli_installation_state(),
     })
 }
@@ -325,47 +340,74 @@ fn persist_pet_position(app: AppHandle, state: tauri::State<'_, AppState>) -> Re
 }
 
 #[tauri::command]
-fn save_user_preferences(
+async fn save_user_preferences(
+    app: AppHandle,
+    preferences: UserPreferencesPatch,
+) -> Result<PreferencesSavePayload, String> {
+    global_shortcuts::on_main_thread(app, move |app| {
+        save_user_preferences_inner(app.clone(), app.state::<AppState>(), preferences)
+    }).await
+}
+
+fn save_user_preferences_inner(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
-    preferences: UserPreferences,
-) -> Result<BootstrapPayload, String> {
+    preferences: UserPreferencesPatch,
+) -> Result<PreferencesSavePayload, String> {
+    let shortcut_touched = preferences.screenshot.as_ref().is_some_and(|patch| patch.shortcut.is_some());
+    let current = state.settings.lock().map_err(|_| "settings lock poisoned")?.clone();
+    let mut candidate = apply_preferences_patch(&current, preferences)?;
     let monitors = collect_monitors(&app)?;
     let default_area = default_activity_area(&monitors);
-    let pet_dimensions = preferences.pet_size.logical_dimensions();
+    let pet_dimensions = candidate.pet_size.logical_dimensions();
     let pet_window_dimensions = pet_physical_dimensions(pet_dimensions, &monitors, None);
-    let normalized_area = preferences
+    candidate.custom_activity_area = candidate
         .custom_activity_area
         .and_then(|area| normalize_activity_area(area, default_area, pet_window_dimensions));
 
-    {
-        let mut settings = state
-            .settings
-            .lock()
-            .map_err(|_| "settings lock poisoned")?;
-        settings.pet_size = preferences.pet_size;
-        settings.activity_level = preferences.activity_level;
-        settings.always_on_top = preferences.always_on_top;
-        settings.countdown = normalize_countdown_preferences(preferences.countdown)?;
-        settings.screenshot = normalize_screenshot_preferences(preferences.screenshot);
-        settings.custom_activity_area = normalized_area;
-        save_settings(&app, &settings)?;
+    if shortcut_touched {
+        candidate.screenshot.shortcut = global_shortcuts::validate_screenshot_shortcut(candidate.screenshot.shortcut.as_deref())?.map(|key| key.into_string());
     }
+    let screenshot_directory = effective_screenshot_directory(&app, &candidate)?.to_string_lossy().into_owned();
+    let persist = || {
+        // Acquire the settings lock before replacing the file, so committing memory
+        // cannot subsequently fail after the atomic disk replacement.
+        let mut settings = state.settings.lock().map_err(|_| "settings lock poisoned")?;
+        save_settings(&app, &candidate)?;
+        *settings = candidate.clone();
+        Ok(())
+    };
+    if shortcut_touched {
+        global_shortcuts::update_screenshot_shortcut(&app, candidate.screenshot.shortcut.as_deref(), persist)?;
+    } else { persist()?; }
 
     if let Some(window) = app.get_webview_window(PET_WINDOW) {
-        window
-            .set_always_on_top(preferences.always_on_top)
-            .map_err(|err| err.to_string())?;
-        window
-            .set_size(Size::Logical(LogicalSize::new(
+        if let Err(error) = window.set_always_on_top(candidate.always_on_top).and_then(|_| window.set_size(Size::Logical(LogicalSize::new(
                 pet_dimensions.width,
                 pet_dimensions.height,
-            )))
-            .map_err(|err| err.to_string())?;
+            )))) { eprintln!("preferences saved; pet projection failed: {error}"); }
     }
-    update_tray_menu(&app)?;
+    if let Err(error) = update_tray_menu(&app) { eprintln!("preferences saved; tray refresh failed: {error}"); }
     let _ = app.emit("deskmon-settings-changed", ());
-    get_bootstrap(app, state)
+    Ok(PreferencesSavePayload { settings: candidate, screenshot_directory, screenshot_shortcut_status: global_shortcuts::screenshot_shortcut_status(&app) })
+}
+
+#[tauri::command]
+fn get_saved_preferences(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<PreferencesSavePayload, String> {
+    let settings = state.settings.lock().map_err(|_| "settings lock poisoned")?.clone();
+    let screenshot_directory = effective_screenshot_directory(&app, &settings)?.to_string_lossy().into_owned();
+    Ok(PreferencesSavePayload { settings, screenshot_directory, screenshot_shortcut_status: global_shortcuts::screenshot_shortcut_status(&app) })
+}
+
+#[tauri::command]
+async fn set_screenshot_shortcut_recording(app: AppHandle, window: WebviewWindow, recording: bool) -> Result<ScreenshotShortcutStatus, String> {
+    if window.label() != SETTINGS_WINDOW { return Err("仅可在设置窗口录入快捷键".into()); }
+    global_shortcuts::on_main_thread(app, move |app| {
+        if recording && (!window.is_focused().unwrap_or(false) || app.get_webview_window(SETTINGS_WINDOW).is_none()) {
+            return Err("设置窗口已失去焦点，请重新录入".into());
+        }
+        global_shortcuts::set_screenshot_shortcut_recording(&app, recording)
+    }).await
 }
 
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
@@ -515,10 +557,10 @@ fn update_screenshot_directory(app: &AppHandle, directory: Option<&Path>) -> Res
         .settings
         .lock()
         .map_err(|_| "settings lock poisoned")?;
-    settings.screenshot = ScreenshotPreferences {
-        save_directory: directory.map(|path| path.to_string_lossy().into_owned()),
-    };
-    save_settings(app, &settings)?;
+    let mut candidate = settings.clone();
+    candidate.screenshot.save_directory = directory.map(|path| path.to_string_lossy().into_owned());
+    save_settings(app, &candidate)?;
+    *settings = candidate;
     drop(settings);
     let _ = app.emit("deskmon-settings-changed", ());
     Ok(())
@@ -1881,6 +1923,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(global_shortcuts::GlobalShortcuts::default())
         .manage(AppState::default())
         .setup(|app| {
             let loaded_settings = load_settings(app.handle());
@@ -1888,6 +1932,7 @@ pub fn run() {
             if let Ok(cache_directory) = app.path().app_cache_dir() {
                 screenshot::cleanup_cache(&cache_directory);
             }
+            let screenshot_shortcut = loaded_settings.screenshot.shortcut.clone();
             {
                 let state = app.state::<AppState>();
                 let mut settings = state.settings.lock().expect("settings lock poisoned");
@@ -1895,6 +1940,7 @@ pub fn run() {
                 let mut remember_state = state.remember.lock().expect("remember lock poisoned");
                 *remember_state = loaded_remember;
             }
+            global_shortcuts::restore_screenshot_shortcut(app.handle(), screenshot_shortcut.as_deref());
 
             #[cfg(target_os = "macos")]
             {
@@ -1917,6 +1963,13 @@ pub fn run() {
 
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() == SETTINGS_WINDOW && matches!(event, tauri::WindowEvent::Destroyed | tauri::WindowEvent::Focused(false)) {
+                if let Err(error) = global_shortcuts::set_screenshot_shortcut_recording(window.app_handle(), false) {
+                    eprintln!("failed to restore screenshot shortcut: {error}");
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_bootstrap,
             get_desktop_snapshot,
@@ -1925,6 +1978,8 @@ pub fn run() {
             set_pet_temporary_presentation,
             persist_pet_position,
             save_user_preferences,
+            get_saved_preferences,
+            set_screenshot_shortcut_recording,
             get_cli_installation_state,
             set_cli_installed,
             choose_screenshot_directory,

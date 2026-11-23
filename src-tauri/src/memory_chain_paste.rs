@@ -1,4 +1,4 @@
-//! The Carbon hotkey and the general pasteboard are coordinated on the main thread.
+//! Tauri hotkey callbacks and pasteboard ownership are coordinated on the main thread.
 
 use core_graphics::{
     event::{CGEvent, CGEventFlags},
@@ -13,73 +13,66 @@ use objc2_foundation::NSString;
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
-    ffi::c_void,
-    mem::size_of,
-    ptr::{null_mut, NonNull},
     thread,
     time::{Duration, Instant},
 };
 use tauri::AppHandle;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 const V_KEY: u32 = 9; // kVK_ANSI_V
-const COMMAND_KEY: u32 = 1 << 8;
-const HOTKEY_EXCLUSIVE: u32 = 1;
-const HOTKEY_SIGNATURE: u32 = u32::from_be_bytes(*b"DmCH");
-const KEYBOARD_EVENT: u32 = u32::from_be_bytes(*b"keyb");
-const HOTKEY_PRESSED: u32 = 5;
-const DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
-const HOTKEY_ID_TYPE: u32 = u32::from_be_bytes(*b"hkid");
-const EVENT_NOT_HANDLED: i32 = -9874;
 const PASTE_INTERVAL: Duration = Duration::from_millis(200);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
-type EventRef = *mut c_void;
-type EventHandlerRef = *mut c_void;
-type EventTargetRef = *mut c_void;
-type EventHotKeyRef = *mut c_void;
-
-#[repr(C)]
-struct EventTypeSpec {
-    event_class: u32,
-    event_kind: u32,
+#[derive(Debug, PartialEq)]
+enum PasteShortcutAction {
+    Deliver,
+    Forward,
+    Ignore,
 }
 
-#[repr(C)]
-#[derive(Default)]
-struct EventHotKeyId {
-    signature: u32,
-    id: u32,
+fn paste_shortcut_action(
+    active: Option<u32>,
+    incoming: u32,
+    state: ShortcutState,
+) -> PasteShortcutAction {
+    if state != ShortcutState::Pressed {
+        return PasteShortcutAction::Ignore;
+    }
+    match active {
+        Some(id) if id == incoming => PasteShortcutAction::Deliver,
+        Some(_) => PasteShortcutAction::Ignore,
+        None => PasteShortcutAction::Forward,
+    }
 }
 
-#[link(name = "Carbon", kind = "framework")]
-extern "C" {
-    fn GetApplicationEventTarget() -> EventTargetRef;
-    fn InstallEventHandler(
-        target: EventTargetRef,
-        callback: unsafe extern "C" fn(*mut c_void, EventRef, *mut c_void) -> i32,
-        count: u32,
-        types: *const EventTypeSpec,
-        user_data: *mut c_void,
-        handler: *mut EventHandlerRef,
-    ) -> i32;
-    fn GetEventParameter(
-        event: EventRef,
-        name: u32,
-        desired_type: u32,
-        actual_type: *mut u32,
-        buffer_size: usize,
-        actual_size: *mut usize,
-        data: *mut c_void,
-    ) -> i32;
-    fn RegisterEventHotKey(
-        key_code: u32,
-        modifiers: u32,
-        id: EventHotKeyId,
-        target: EventTargetRef,
-        options: u32,
-        hotkey: *mut EventHotKeyRef,
-    ) -> i32;
-    fn UnregisterEventHotKey(hotkey: EventHotKeyRef) -> i32;
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    use tauri_plugin_global_shortcut::ShortcutState::{Pressed, Released};
+
+    #[test]
+    fn paste_key_consumes_only_current_session_pressed_events() {
+        assert_eq!(
+            paste_shortcut_action(Some(2), 2, Pressed),
+            PasteShortcutAction::Deliver
+        );
+        assert_eq!(
+            paste_shortcut_action(Some(2), 1, Pressed),
+            PasteShortcutAction::Ignore
+        );
+        assert_eq!(
+            paste_shortcut_action(Some(2), 2, Released),
+            PasteShortcutAction::Ignore
+        );
+        assert_eq!(
+            paste_shortcut_action(None, 2, Pressed),
+            PasteShortcutAction::Forward
+        );
+        assert_eq!(
+            paste_shortcut_action(None, 2, Released),
+            PasteShortcutAction::Ignore
+        );
+    }
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
@@ -90,7 +83,6 @@ extern "C" {
 
 thread_local! {
     static SESSION: RefCell<Option<PasteSession>> = const { RefCell::new(None) };
-    static HANDLER_INSTALLED: Cell<bool> = const { Cell::new(false) };
     static RETURN_APP: Cell<Option<i32>> = const { Cell::new(None) };
     static NEXT_SESSION_ID: Cell<u32> = const { Cell::new(0) };
 }
@@ -98,7 +90,7 @@ thread_local! {
 struct PasteSession {
     chain_id: String,
     id: u32,
-    hotkey: NonNull<c_void>,
+    hotkey: tauri_plugin_global_shortcut::Shortcut,
     app: AppHandle,
     values: VecDeque<String>,
     pending_pastes: VecDeque<i32>,
@@ -112,7 +104,9 @@ impl Drop for PasteSession {
         // The retained pasteboard revision also covers a user copying the same text.
         let board = NSPasteboard::generalPasteboard();
         self.clear_owned_clipboard(&board);
-        unsafe { UnregisterEventHotKey(self.hotkey.as_ptr()) };
+        if let Err(error) = self.app.global_shortcut().unregister(self.hotkey) {
+            eprintln!("failed to release memory-chain shortcut: {error}");
+        }
     }
 }
 
@@ -165,13 +159,12 @@ pub fn start(app: AppHandle, chain_id: String, values: Vec<String>) -> Result<()
     }
 
     cancel(None);
-    install_handler()?;
     let id = NEXT_SESSION_ID.with(|next| {
         let id = next.get().wrapping_add(1);
         next.set(id);
         id
     });
-    let hotkey = register_hotkey(id)?;
+    let hotkey = register_hotkey(&app, id)?;
     SESSION.with_borrow_mut(|session| {
         *session = Some(PasteSession {
             chain_id,
@@ -217,70 +210,32 @@ fn foreground_pid() -> Option<i32> {
         .map(|app| app.processIdentifier())
 }
 
-fn install_handler() -> Result<(), String> {
-    if HANDLER_INSTALLED.get() {
-        return Ok(());
-    }
-    let spec = EventTypeSpec {
-        event_class: KEYBOARD_EVENT,
-        event_kind: HOTKEY_PRESSED,
-    };
-    let status = unsafe {
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            handle_hotkey,
-            1,
-            &spec,
-            null_mut(),
-            null_mut(),
-        )
-    };
-    if status != 0 {
-        return Err(format!("无法接收 ⌘V（{status}）"));
-    }
-    HANDLER_INSTALLED.set(true);
-    Ok(())
-}
-
-fn register_hotkey(id: u32) -> Result<NonNull<c_void>, String> {
-    let mut hotkey = null_mut();
-    let status = unsafe {
-        RegisterEventHotKey(
-            V_KEY,
-            COMMAND_KEY,
-            EventHotKeyId {
-                signature: HOTKEY_SIGNATURE,
-                id,
-            },
-            GetApplicationEventTarget(),
-            HOTKEY_EXCLUSIVE,
-            &mut hotkey,
-        )
-    };
-    if status != 0 {
-        return Err(format!("无法启用记忆链的 ⌘V，请检查快捷键冲突（{status}）"));
-    }
-    NonNull::new(hotkey).ok_or_else(|| "无法启用记忆链的 ⌘V".into())
-}
-
-unsafe extern "C" fn handle_hotkey(_: *mut c_void, event: EventRef, _: *mut c_void) -> i32 {
-    let mut id = EventHotKeyId::default();
-    let status = GetEventParameter(
-        event,
-        DIRECT_OBJECT,
-        HOTKEY_ID_TYPE,
-        null_mut(),
-        size_of::<EventHotKeyId>(),
-        null_mut(),
-        (&mut id as *mut EventHotKeyId).cast(),
-    );
-    if status != 0 || id.signature != HOTKEY_SIGNATURE {
-        return EVENT_NOT_HANDLED;
-    }
-    if let Some(pid) = foreground_pid() {
-        receive_paste(id.id, pid);
-    }
-    0
+fn register_hotkey(
+    app: &AppHandle,
+    id: u32,
+) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {
+    let hotkey = crate::global_shortcuts::registration_shortcut("Super+KeyV".parse().unwrap())?;
+    app.global_shortcut()
+        .on_shortcut(hotkey, move |app, _, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            let app = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let active =
+                    SESSION.with_borrow(|session| session.as_ref().map(|active| active.id));
+                match paste_shortcut_action(active, id, event.state) {
+                    PasteShortcutAction::Deliver | PasteShortcutAction::Forward => {
+                        if let Some(pid) = foreground_pid() {
+                            receive_paste(id, pid);
+                        }
+                    }
+                    PasteShortcutAction::Ignore => {}
+                }
+            });
+        })
+        .map_err(|error| format!("无法启用记忆链的 ⌘V，请检查快捷键冲突：{error}"))?;
+    Ok(hotkey)
 }
 
 fn receive_paste(id: u32, pid: i32) {

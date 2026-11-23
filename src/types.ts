@@ -27,6 +27,19 @@ export interface Settings {
 
 export interface ScreenshotPreferences {
   saveDirectory: string | null;
+  shortcut: string | null;
+}
+
+export interface ScreenshotShortcutStatus {
+  active: boolean;
+  recording: boolean;
+  error: string | null;
+}
+
+export interface PreferencesSavePayload {
+  settings: Settings;
+  screenshotDirectory: string;
+  screenshotShortcutStatus: ScreenshotShortcutStatus;
 }
 
 export interface CountdownPreferences {
@@ -68,6 +81,7 @@ export interface BootstrapPayload {
   petPosition: Point;
   countdown: CountdownSnapshot;
   screenshotDirectory: string;
+  screenshotShortcutStatus: ScreenshotShortcutStatus;
   cliInstallationState: CliInstallationState;
 }
 

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { formatShortcut, shortcutFromEvent, ShortcutRecorder } from "./screenshot/shortcut";
 import type {
   ActivityLevel,
   BootstrapPayload,
@@ -8,11 +9,15 @@ import type {
   PetSize,
   Point,
   Rect,
+  ScreenshotPreferences,
+  PreferencesSavePayload,
+  ScreenshotShortcutStatus,
   UserPreferences,
 } from "./types";
 
 const timerMinMinutes = 1;
 const timerMaxMinutes = 180;
+type PreferencesPatch = Omit<Partial<UserPreferences>, "screenshot"> & { screenshot?: Partial<ScreenshotPreferences> };
 
 const sizeLabels: Record<PetSize, string> = {
   small: "小",
@@ -38,13 +43,21 @@ class SettingsController {
   private draftArea: Rect | null = null;
   private readonly canvas = document.createElement("canvas");
   private readonly status = document.createElement("p");
-  private draftPreferences: UserPreferences | null = null;
+  private saveVersion = 0;
   private cliOperationInFlight = false;
   private cliFeedback: string | null = null;
   private cliFeedbackTone: "neutral" | "success" | "warning" | "error" = "neutral";
-  private saveQueue: Promise<BootstrapPayload | null> = Promise.resolve(null);
+  private saveQueue: Promise<PreferencesSavePayload | null> = Promise.resolve(null);
   private statusMessage: string | null = null;
   private statusTone: "neutral" | "success" | "warning" | "error" = "neutral";
+  private shortcutBusy = false;
+  private shortcutFeedback: string | null = null;
+  private readonly shortcutRecorder = new ShortcutRecorder(async (recording) => {
+    // Wait for earlier preference saves before temporarily changing registration.
+    await this.saveQueue;
+    const status = await invoke<ScreenshotShortcutStatus>("set_screenshot_shortcut_recording", { recording });
+    if (this.bootstrap) this.bootstrap.screenshotShortcutStatus = status;
+  });
 
   constructor(private readonly root: HTMLElement) {}
 
@@ -55,6 +68,15 @@ class SettingsController {
     this.render();
     this.installCanvasHandlers();
     window.addEventListener("resize", () => this.drawAreaCanvas());
+    window.addEventListener("keydown", (event) => this.handleShortcutKey(event), true);
+    window.addEventListener("blur", () => {
+      if (this.shortcutRecorder.recording) void this.cancelShortcutRecording();
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (this.shortcutRecorder.recording && event.target instanceof Element && !event.target.closest(".shortcut-record-button")) {
+        void this.cancelShortcutRecording();
+      }
+    }, true);
   }
 
   private render(): void {
@@ -233,6 +255,34 @@ class SettingsController {
     directoryControl.append(path, actions);
     field.append(directoryControl);
     fields.append(field);
+    const shortcutField = element("div", "field-row screenshot-shortcut-row");
+    shortcutField.append(element("span", "field-label", "全局快捷键"));
+    const shortcutControl = element("div", "screenshot-shortcut-control");
+    const shortcutActions = element("div", "screenshot-directory-actions");
+    const recording = this.shortcutRecorder.recording;
+    const shortcut = this.bootstrap?.settings.screenshot.shortcut ?? null;
+    const recordButton = element("button", `ghost-button shortcut-record-button${recording ? " recording" : ""}`, recording ? (this.shortcutRecorder.ready ? "请按快捷键…" : "准备录入…") : formatShortcut(shortcut)) as HTMLButtonElement;
+    recordButton.disabled = this.shortcutBusy;
+    recordButton.setAttribute("aria-label", recording ? (this.shortcutRecorder.ready ? "请按快捷键，Escape 取消" : "正在准备快捷键录入") : "录入截图全局快捷键");
+    recordButton.setAttribute("aria-pressed", String(recording));
+    recordButton.addEventListener("click", () => void (recording ? this.cancelShortcutRecording() : this.startShortcutRecording()));
+    const clearButton = element("button", "ghost-button", "清除") as HTMLButtonElement;
+    clearButton.disabled = !shortcut || this.shortcutBusy || recording;
+    clearButton.addEventListener("click", () => this.save({ screenshot: { shortcut: null } }));
+    shortcutActions.append(recordButton, clearButton);
+    const hint = element("p", "shortcut-hint", this.shortcutFeedback ?? (recording ? "包含 ⌘、⌃ 或 ⌥，按 Escape 取消；⌘V 留给记忆链。" : "点击录入；Deskmon 运行时可在其他应用中使用。"));
+    hint.setAttribute("aria-live", "polite");
+    const shortcutStatus = this.bootstrap?.screenshotShortcutStatus;
+    shortcutControl.append(shortcutActions, hint);
+    if (shortcutStatus?.error) shortcutControl.append(element("p", "shortcut-error", `快捷键状态：${shortcutStatus.error}`));
+    if (shortcut && !shortcutStatus?.active && !recording) {
+      const retryButton = element("button", "ghost-button", "重新启用") as HTMLButtonElement;
+      retryButton.disabled = this.shortcutBusy;
+      retryButton.addEventListener("click", () => this.save({ screenshot: { shortcut } }));
+      shortcutControl.append(retryButton);
+    }
+    shortcutField.append(shortcutControl);
+    fields.append(shortcutField);
     panel.append(header, fields);
     return panel;
   }
@@ -436,61 +486,112 @@ class SettingsController {
     return wrap;
   }
 
-  private save(patch: Partial<UserPreferences>): void {
+  private save(patch: PreferencesPatch): void {
     if (!this.bootstrap) {
       return;
     }
     const areaTouched = Object.prototype.hasOwnProperty.call(patch, "customActivityArea");
-    const settings = this.bootstrap.settings;
-    const current = this.draftPreferences ?? {
-      petSize: settings.petSize,
-      activityLevel: settings.activityLevel,
-      alwaysOnTop: settings.alwaysOnTop,
-      countdown: { ...settings.countdown },
-      screenshot: { ...settings.screenshot },
-      customActivityArea: this.customArea,
-    };
-    const preferences: UserPreferences = {
-      petSize: patch.petSize ?? current.petSize,
-      activityLevel: patch.activityLevel ?? current.activityLevel,
-      alwaysOnTop: patch.alwaysOnTop ?? current.alwaysOnTop,
-      countdown: patch.countdown ? { ...patch.countdown } : { ...current.countdown },
-      screenshot: patch.screenshot ? { ...patch.screenshot } : { ...current.screenshot },
-      customActivityArea:
-        patch.customActivityArea === undefined ? current.customActivityArea : patch.customActivityArea,
-    };
-    this.draftPreferences = preferences;
+    const version = ++this.saveVersion;
+    const shortcutTouched = !!patch.screenshot && Object.prototype.hasOwnProperty.call(patch.screenshot, "shortcut");
+    if (shortcutTouched) {
+      this.shortcutBusy = true;
+      this.shortcutFeedback = null;
+      this.render();
+    }
     this.setStatus("保存中");
     this.saveQueue = this.saveQueue
       .then(() =>
-        invoke<BootstrapPayload>("save_user_preferences", {
-          preferences,
+        invoke<PreferencesSavePayload>("save_user_preferences", {
+          preferences: patch,
         }),
       )
-      .then((bootstrap) => {
-        if (this.draftPreferences === preferences) {
-          this.draftPreferences = null;
-          this.bootstrap = bootstrap;
-          this.customArea = bootstrap.settings.customActivityArea;
-          if (areaTouched && preferences.customActivityArea && !this.customArea) {
+      .then((saved) => {
+        this.applySavedPreferences(saved);
+        if (version === this.saveVersion) {
+          this.customArea = saved.settings.customActivityArea;
+          if (areaTouched && patch.customActivityArea && !this.customArea) {
             this.setStatus("区域超出可用工作区，已恢复默认区域", "warning");
-          } else if (areaTouched) {
-            this.setStatus(this.savedAreaMessage(), "success");
           } else {
-            this.setStatus("已保存", "success");
+            this.setStatus(areaTouched ? this.savedAreaMessage() : "已保存", "success");
           }
           this.render();
         }
-        return bootstrap;
+        return saved;
       })
-      .catch((error) => {
-        if (this.draftPreferences === preferences) {
-          this.draftPreferences = null;
-        }
+      .catch(async (error) => {
+        // Read without writing or reprojecting windows; failed patches must never
+        // become the base of another queued change.
+        await this.refreshSavedPreferences();
         this.setStatus(String(error), "error");
+        if (shortcutTouched) this.shortcutFeedback = String(error);
         return null;
+      })
+      .finally(() => {
+        if (shortcutTouched) {
+          this.shortcutBusy = false;
+          this.render();
+        }
       });
     void this.saveQueue;
+  }
+
+  private applySavedPreferences(saved: PreferencesSavePayload): void {
+    if (!this.bootstrap) return;
+    this.bootstrap.settings = saved.settings;
+    this.bootstrap.screenshotDirectory = saved.screenshotDirectory;
+    this.bootstrap.screenshotShortcutStatus = saved.screenshotShortcutStatus;
+  }
+
+  private async refreshSavedPreferences(): Promise<void> {
+    try { this.applySavedPreferences(await invoke<PreferencesSavePayload>("get_saved_preferences")); }
+    catch { /* Preserve the last confirmed snapshot if the app is shutting down. */ }
+  }
+
+  private async startShortcutRecording(): Promise<void> {
+    this.shortcutFeedback = null;
+    const starting = this.shortcutRecorder.start();
+    this.render();
+    try { await starting; }
+    catch (error) {
+      this.shortcutFeedback = String(error);
+      await this.refreshSavedPreferences();
+    }
+    this.render();
+    if (this.shortcutRecorder.ready) this.root.querySelector<HTMLButtonElement>(".shortcut-record-button")?.focus();
+  }
+
+  private async cancelShortcutRecording(): Promise<void> {
+    try { await this.shortcutRecorder.cancel(); }
+    catch (error) {
+      this.shortcutFeedback = String(error);
+      await this.refreshSavedPreferences();
+    }
+    this.render();
+  }
+
+  private handleShortcutKey(event: KeyboardEvent): void {
+    if (!this.shortcutRecorder.recording) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.code === "Escape" || event.code === "Tab") {
+      void this.cancelShortcutRecording();
+      return;
+    }
+    if (!this.shortcutRecorder.ready || event.repeat) return;
+    const shortcut = shortcutFromEvent(event);
+    if (!shortcut) {
+      if (!/^(Meta|Control|Alt|Shift)/.test(event.code)) {
+        this.shortcutFeedback = event.metaKey && event.code === "KeyV" ? "⌘V 已保留给记忆链，请选择其他组合。" : "请使用 ⌘、⌃ 或 ⌥ 配合字母、数字、方向键、空格或 F1–F12。";
+        this.render();
+      }
+      return;
+    }
+    this.shortcutBusy = true;
+    void this.shortcutRecorder.cancel().catch((error) => {
+      // A failed restoration still permits replacing the conflicting old binding.
+      this.shortcutFeedback = String(error);
+    }).then(() => this.save({ screenshot: { shortcut } }));
+    this.render();
   }
 
   private installCanvasHandlers(): void {

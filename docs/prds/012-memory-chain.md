@@ -5,6 +5,8 @@
 - **发布** [GitHub Issue #23](https://github.com/l3ve/deskmon/issues/23) · `ready-for-agent`
 - **覆盖范围** 替换 PRD 002 的加密笔记本和 PRD 003 的变量库。临时剪贴板历史继续沿用 PRD 002。[PRD 002](002-remember-clipboard-history.md) · [PRD 003](003-remember-variable-library.md)
 
+2026-11-23 更新：[统一快捷键设计](../superpowers/specs/2026-11-23-global-shortcuts-design.md)将记忆链 `⌘V` 迁移到 Tauri 全局快捷键插件；每次会话使用不同原生注册 ID，只注销自己的注册。顺序粘贴交互继续沿用本 PRD；旧版本实机验收记录不代表本次迁移已经完成原生验收。
+
 ## 问题陈述
 
 登录时，用户经常要先填账号，再填密码。有的网站把它们放在不同页面，有的工作流程还需要切换 App。原先笔记本和变量都可以取出一段文本，每填一个字段都得重新打开菜单、找到对应条目、复制，再回到输入框粘贴。需要连续填三段或更多内容时，操作次数随之增加。

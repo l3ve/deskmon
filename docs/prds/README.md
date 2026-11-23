@@ -9,10 +9,10 @@
 | [001](001-tauri-mac-desktop-pet.md) | macOS 桌面像素宠物 | 已实现 | 桌宠基础仍有效；旧计时器与提醒规则由 011 覆盖 |
 | [002](002-remember-clipboard-history.md) | 记忆力剪贴板历史 | 部分有效 | 临时历史继续有效；笔记本由[012 记忆链](012-memory-chain.md)替换 |
 | [005](005-desktop-pet-animation-polish.md) | 桌宠动画节奏优化 | 已实现 | 七种状态和三档活动节奏继续有效 |
-| [008](008-screenshot-annotation-editor.md) | 区域截图原地标注 | 已实现 | 覆盖 007 的原生框选、立即保存和截图声音流程 |
+| [008](008-screenshot-annotation-editor.md) | 区域截图原地标注 | 已实现；新热键原生全流程待验收 | 覆盖 007 交互；全局启动入口见[快捷键设计](../superpowers/specs/2026-11-23-global-shortcuts-design.md) |
 | [010](010-cursor-chase-interaction.md) | 鼠标追逐互动 | 已实现 | 当前调校基线仍需持续观察桌面手感 |
 | [011](011-unified-pet-dialog-notifications.md) | 统一宠物提醒与单次倒计时 | 已实现 | 当前提醒、消息队列和倒计时的权威需求 |
-| [012](012-memory-chain.md) | 记忆链 | 已实现，本机安装版测试通过 | 覆盖 002 的笔记本与 003 的变量库 |
+| [012](012-memory-chain.md) | 记忆链 | 已迁移 Tauri 热键；原生全流程待验收 | 覆盖 002/003；旧版验收不代替迁移后的原生输入验收 |
 
 ## 历史方案与被覆盖部分
 

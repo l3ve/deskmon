@@ -510,6 +510,37 @@ button {
   flex: 0 0 auto;
 }
 
+.screenshot-shortcut-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.shortcut-record-button {
+  min-width: 132px;
+  font-variant-numeric: tabular-nums;
+}
+
+.shortcut-record-button.recording {
+  border-color: #a79bc2;
+  background: #f1edf7;
+}
+
+.shortcut-hint,
+.shortcut-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #797480;
+  overflow-wrap: anywhere;
+}
+
+.shortcut-error {
+  color: #a24d56;
+}
+
 .screenshot-directory-control {
   display: flex;
   align-items: center;
